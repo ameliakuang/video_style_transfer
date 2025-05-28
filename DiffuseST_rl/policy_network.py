@@ -26,7 +26,7 @@ class LatentPolicy(nn.Module):
         self.conv1 = nn.Conv2d(in_ch, base_ch, kernel_size=3, padding=1)
         self.in1 = nn.InstanceNorm2d(base_ch)
         
-        self.conv2 = nn.Conv2d(base_ch, base_ch, kernel_size=3, padding=1) 
+        self.conv2 = nn.Conv2d(base_ch, base_ch, kernel_size=3, padding=1)
         self.in2 = nn.InstanceNorm2d(base_ch)
 
         self.res = ResBlock(base_ch)
@@ -34,6 +34,11 @@ class LatentPolicy(nn.Module):
         self.mu_head     = nn.Conv2d(base_ch, latent_channels, kernel_size=1)
         self.logstd_head = nn.Conv2d(base_ch, latent_channels, kernel_size=1)
     
+        nn.init.xavier_uniform_(self.mu_head.weight, gain=0.01)
+        nn.init.constant_(self.mu_head.bias, 0)
+        nn.init.xavier_uniform_(self.logstd_head.weight, gain=0.01)
+        nn.init.constant_(self.logstd_head.bias, -1)  # start with small variance
+        
     def forward(self, z_t, z_tp1):
         x = torch.cat([z_t, z_tp1], dim=1)
         x = F.relu(self.in1(self.conv1(x)))
