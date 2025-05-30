@@ -15,8 +15,8 @@ class StyleEnv:
                  style_latents,
                  curr_content_file,
                  style_file,
-                 next_content_latents,
-                 next_content_file,
+                 prev_content_latents,
+                 prev_content_file,
                  content_weight=0.5,
                  temporal_weight=1.0,
                  ):
@@ -28,8 +28,8 @@ class StyleEnv:
         self.style_latents = style_latents
         self.curr_content_file = curr_content_file
         self.style_file = style_file
-        self.next_content_latents = next_content_latents
-        self.next_content_file = next_content_file
+        self.prev_content_latents = prev_content_latents
+        self.prev_content_file = prev_content_file
 
         # obtain output file names for debugging purposes - can be removed later
         self.output_modified_fn = f'{self.curr_content_file}_modified'
@@ -44,23 +44,26 @@ class StyleEnv:
         ])
         self.curr_content_frame = self.transform(Image.open(self.curr_content_file))
         
-        self.past_stylized_frame = [] # [T, C, H, W]
 
     
-    def _compute_temporal_loss(self, stylized_frame):
+    def _compute_temporal_loss(self, 
+                               stylized_frame,
+                               prev_stylized_frame):
+        if prev_stylized_frame is None:
+            return 0.0
         temp_loss_fn = TemporalConsistencyLossRAFT(
-        small=True,
-        loss_type='l1',
-        occlusion=True,
-        occ_thresh_px=1.0,
-        device=self.device)
+            small=True,
+            loss_type='l1',
+            occlusion=True,
+            occ_thresh_px=1.0,
+            device=self.device)
 
         curr_content_img = Image.open(self.curr_content_file)
-        next_content_img = Image.open(self.next_content_file)
+        prev_content_file = Image.open(self.prev_content_file)
 
-        F_t = self.transform(curr_content_img).unsqueeze(0).to(self.device)
-        F_tp1 = self.transform(next_content_img).unsqueeze(0).to(self.device)
-        S_t = self.transform(stylized_frame).unsqueeze(0).to(self.device) # t
+        F_t = self.transform(prev_content_file).unsqueeze(0).to(self.device)
+        F_tp1 = self.transform(curr_content_img).unsqueeze(0).to(self.device)
+        S_t = self.transform(prev_stylized_frame).unsqueeze(0).to(self.device) # t
         # TODO: need past stylized frame
         S_tp1 = self.transform(stylized_frame).unsqueeze(0).to(self.device) # t+1
 
@@ -94,16 +97,16 @@ class StyleEnv:
         style_loss = loss_fn(g_f, g_s)
         return style_loss.item()
     
-    def _compute_losses(self, stylized_frame):
+    def _compute_losses(self, stylized_frame, prev_stylized_frame):
         print(type(stylized_frame))
         content_loss = self._compute_content_loss(stylized_frame)
         style_loss = self._compute_style_loss(stylized_frame)
-        temporal_loss = self._compute_temporal_loss(stylized_frame)
+        temporal_loss = self._compute_temporal_loss(stylized_frame, prev_stylized_frame)
         total_loss = content_loss + style_loss + temporal_loss
         print(f"content_loss: {content_loss}, style_loss: {style_loss}, temporal_loss: {temporal_loss}\n")
         return content_loss, style_loss, temporal_loss, total_loss
 
-    def step(self, delta_z):
+    def step(self, delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame):
         """
         Apply delta_z to the content latents to obtain modified latents
         Run PNP to obtain modified frame and original stylized frame
@@ -125,13 +128,10 @@ class StyleEnv:
                                         self.style_file,
                                         content_fn=self.output_ori_fn,
                                         style_fn=self.style_file)[0]
-        
-        # cache the modified stylized frame
-        self.past_stylized_frame.append(modified_stylized_frame)
 
         # compute reward
-        content, style, temporal, loss_modified = self._compute_losses(modified_stylized_frame)
-        content_ori, style_ori, temporal_ori, loss_ori = self._compute_losses(ori_stylized_frame)
+        content, style, temporal, loss_modified = self._compute_losses(modified_stylized_frame, prev_modified_stylized_frame)
+        content_ori, style_ori, temporal_ori, loss_ori = self._compute_losses(ori_stylized_frame, prev_ori_stylized_frame)
         reward = loss_ori - loss_modified
 
-        return reward, content, style, temporal, loss_modified, content_ori, style_ori, temporal_ori, loss_ori
+        return reward, content, style, temporal, loss_modified, content_ori, style_ori, temporal_ori, loss_ori, modified_stylized_frame, ori_stylized_frame

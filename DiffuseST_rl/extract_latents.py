@@ -107,16 +107,16 @@ def get_latents(opt):
                 style_latents = torch.cat(style_latents, dim=0).to(opt.device)
             all_style_latents.append(style_latents)
             
-    for i, (content_latents, content_file) in enumerate(zip(all_content_latents, content_path)):
-        print(f"Processing content file and latents: {content_latents.shape}, {content_file}")
+    # for i, (content_latents, content_file) in enumerate(zip(all_content_latents, content_path)):
+    #     print(f"Processing content file and latents: {content_latents.shape}, {content_file}")
         
-        if i < len(all_content_latents) - 1:
-            next_content_latents = all_content_latents[i+1]
+    #     if i < len(all_content_latents) - 1:
+    #         next_content_latents = all_content_latents[i+1]
 
-        for style_latents, style_file in zip(all_style_latents, style_path):
-            pnp.run_pnp(content_latents, style_latents, style_file, content_fn=content_file, style_fn=style_file)
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+    #     for style_latents, style_file in zip(all_style_latents, style_path):
+    #         pnp.run_pnp(content_latents, style_latents, style_file, content_fn=content_file, style_fn=style_file)
+    #         if torch.cuda.is_available():
+    #             torch.cuda.empty_cache()
     
     return content_path, all_content_latents, style_path, all_style_latents
 

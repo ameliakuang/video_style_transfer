@@ -61,53 +61,63 @@ def run_policy_gradients(content_path, all_content_latents, style_path, all_styl
         epoch_temporal_losses = []
         epoch_total_losses = []
         epoch_reward_history = []
+        epoch_modified_stylized_frames = []
+        epoch_ori_stylized_frames = []
 
         # per epoch i process all frames
         for i, (curr_content_latents, curr_content_file) in enumerate(zip(all_content_latents, content_path)):
             print(f"Processing content file and latents: {curr_content_latents.shape}, {curr_content_file}")
             
-            if i < len(all_content_latents) - 1:
-                next_content_latents = all_content_latents[i+1]
-                next_content_file = content_path[i+1]
+            if i == 0:
+                continue
+            prev_content_latents = all_content_latents[i-1]
+            prev_content_file = content_path[i-1]
 
-                for style_latents, style_file in zip(all_style_latents, style_path):
-                    print(f"in run_policy_gradients style_file{style_file}")
-                    style_env = StyleEnv(pnp,
-                                        scheduler,
-                                        opt.device,
-                                        curr_content_latents,
-                                        style_latents,
-                                        curr_content_file,
-                                        style_file,
-                                        next_content_latents,
-                                        next_content_file)
-                    print(f"type(curr_content_latents): {type(curr_content_latents)}")
-                    print(f"curr_content_latents.size(): {curr_content_latents.size()}")
-                    print(f"type(next_content_latents): {type(next_content_latents)}")
-                    print(f"next_content_latents.size(): {next_content_latents.size()}")
-                    # obtain delta_z
-                    delta_z, log_prob = policy.sample(curr_content_latents[-1][None, :, :, :], next_content_latents[-1][None, :, :, :])
-                    print(f"type(delta_z): {type(delta_z)}")
-                    print(f"delta_z.size(): {delta_z.size()}")
-                    print(f"type(log_prob): {type(log_prob)}")
-                    print(f"log_prob.size(): {log_prob.size()}")
+            for style_latents, style_file in zip(all_style_latents, style_path):
+                print(f"in run_policy_gradients style_file{style_file}")
+                style_env = StyleEnv(pnp,
+                                    scheduler,
+                                    opt.device,
+                                    curr_content_latents,
+                                    style_latents,
+                                    curr_content_file,
+                                    style_file,
+                                    prev_content_latents,
+                                    prev_content_file)
+                print(f"type(curr_content_latents): {type(curr_content_latents)}")
+                print(f"curr_content_latents.size(): {curr_content_latents.size()}")
+                print(f"type(prev_content_latents): {type(prev_content_latents)}")
+                print(f"prev_content_latents.size(): {prev_content_latents.size()}")
+                # obtain delta_z
+                delta_z, log_prob = policy.sample(prev_content_latents[-1][None, :, :, :], curr_content_latents[-1][None, :, :, :])
+                print(f"type(delta_z): {type(delta_z)}")
+                print(f"delta_z.size(): {delta_z.size()}")
+                print(f"type(log_prob): {type(log_prob)}")
+                print(f"log_prob.size(): {log_prob.size()}")
 
-                    # obtain reward
-                    reward, content, style, temporal, loss_modified, content_ori, style_ori, temporal_ori, loss_ori = style_env.step(delta_z)
-                    # update policy
-                    policy_loss = -log_prob[-1] * reward
-                    print(f'type(policy_loss): {type(policy_loss)}')
-                    print(f'policy_loss.size(): {policy_loss.size()}')
-                    optimizer.zero_grad()
-                    policy_loss.backward()
-                    optimizer.step()
+                # obtain reward
+                prev_modified_stylized_frame = None
+                prev_ori_stylized_frame = None
+                if epoch_modified_stylized_frames and epoch_ori_stylized_frames:
+                    prev_modified_stylized_frame = epoch_modified_stylized_frames[-1]
+                    prev_ori_stylized_frame = epoch_ori_stylized_frames[-1]
+                reward, content, style, temporal, loss_modified, content_ori, style_ori, temporal_ori, loss_ori, modified_stylized_frame, ori_stylized_frame = style_env.step(delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame)
+                # update policy
+                policy_loss = -log_prob[-1] * reward
+                print(f'type(policy_loss): {type(policy_loss)}')
+                print(f'policy_loss.size(): {policy_loss.size()}')
+                optimizer.zero_grad()
+                policy_loss.backward()
+                optimizer.step()
 
-                    epoch_policy_losses.append(policy_loss)
-                    epoch_content_losses.append(content)
-                    epoch_style_losses.append(style)
-                    epoch_temporal_losses.append(temporal)
-                    epoch_total_losses.append(loss_modified)
-                    epoch_reward_history.append(reward)
+                epoch_policy_losses.append(policy_loss)
+                epoch_content_losses.append(content)
+                epoch_style_losses.append(style)
+                epoch_temporal_losses.append(temporal)
+                epoch_total_losses.append(loss_modified)
+                epoch_reward_history.append(reward)
+                epoch_modified_stylized_frames.append(modified_stylized_frame)
+                epoch_ori_stylized_frames.append(ori_stylized_frame)
 
         all_epoch_policy_losses.append(epoch_policy_losses)
         all_epoch_content_losses.append(epoch_content_losses)
