@@ -19,7 +19,7 @@ class ResBlock(nn.Module):
 
 class LatentPolicy(nn.Module):
     def __init__(self, base_ch=16):
-        super().__init__() # current_latents dimension 999 Timestep diffusion x 4 x 64 x 113
+        super().__init__() # the latent from the last timestep diffusion 1 x 4 x 64 x 113
         latent_channels = 4
         in_ch = 2 * latent_channels  # we concat z_t and z_{t+1}
 

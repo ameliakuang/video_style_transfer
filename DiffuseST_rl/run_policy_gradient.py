@@ -23,7 +23,7 @@ from extract_latents import get_latents
 from policy_network import LatentPolicy
 from style_env import StyleEnv
 
-def run_policy_gradients(opt, content_path, all_content_latents, style_path, all_style_latents):
+def run_policy_gradients(content_path, all_content_latents, style_path, all_style_latents, num_epochs, lr, temporal_weight, content_weight):
     model_key = "Salesforce/blipdiffusion"
 
     blip_diffusion_pipe = BLIP.from_pretrained(model_key, torch_dtype=torch.float16).to(opt.device)
@@ -45,11 +45,22 @@ def run_policy_gradients(opt, content_path, all_content_latents, style_path, all
     policy = LatentPolicy().to(opt.device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=opt.lr)
 
+    all_epoch_policy_losses = []
+    all_epoch_content_losses = []
+    all_epoch_style_losses = []
+    all_epoch_temporal_losses = []
+    all_epoch_total_losses = []
+    all_epoch_reward_history = []
+    
     # start RL training loop 
-    for e in range(opt.num_epochs):
-        print(f"Epoch {e + 1}/{opt.num_epochs}")
-        epoch_rewards = []
-        epoch_losses = []
+    for e in range(num_epochs):
+        print(f"Epoch {e + 1}/{num_epochs}")
+        epoch_policy_losses = []
+        epoch_content_losses = []
+        epoch_style_losses = []
+        epoch_temporal_losses = []
+        epoch_total_losses = []
+        epoch_reward_history = []
 
         # per epoch i process all frames
         for i, (curr_content_latents, curr_content_file) in enumerate(zip(all_content_latents, content_path)):
@@ -70,19 +81,40 @@ def run_policy_gradients(opt, content_path, all_content_latents, style_path, all
                                         style_file,
                                         next_content_latents,
                                         next_content_file)
+                    print(f"type(curr_content_latents): {type(curr_content_latents)}")
+                    print(f"curr_content_latents.size(): {curr_content_latents.size()}")
+                    print(f"type(next_content_latents): {type(next_content_latents)}")
+                    print(f"next_content_latents.size(): {next_content_latents.size()}")
                     # obtain delta_z
-                    delta_z, log_prob = policy.sample(curr_content_latents, next_content_latents)
-                    print(f"delta_z shape: {delta_z.shape}")
+                    delta_z, log_prob = policy.sample(curr_content_latents[-1][None, :, :, :], next_content_latents[-1][None, :, :, :])
+                    print(f"type(delta_z): {type(delta_z)}")
+                    print(f"delta_z.size(): {delta_z.size()}")
+                    print(f"type(log_prob): {type(log_prob)}")
+                    print(f"log_prob.size(): {log_prob.size()}")
+
                     # obtain reward
-                    reward = style_env.step(delta_z)
+                    reward, content, style, temporal, loss_modified, content_ori, style_ori, temporal_ori, loss_ori = style_env.step(delta_z)
                     # update policy
-                    policy_loss = -log_prob * reward
+                    policy_loss = -log_prob[-1] * reward
+                    print(f'type(policy_loss): {type(policy_loss)}')
+                    print(f'policy_loss.size(): {policy_loss.size()}')
                     optimizer.zero_grad()
                     policy_loss.backward()
                     optimizer.step()
 
-                    epoch_rewards.append(reward)
-                    
+                    epoch_policy_losses.append(policy_loss)
+                    epoch_content_losses.append(content)
+                    epoch_style_losses.append(style)
+                    epoch_temporal_losses.append(temporal)
+                    epoch_total_losses.append(loss_modified)
+                    epoch_reward_history.append(reward)
+
+        all_epoch_policy_losses.append(epoch_policy_losses)
+        all_epoch_content_losses.append(epoch_content_losses)
+        all_epoch_style_losses.append(epoch_style_losses)
+        all_epoch_temporal_losses.append(epoch_temporal_losses)
+        all_epoch_total_losses.append(epoch_total_losses)
+        all_epoch_reward_history.append(epoch_reward_history)
 
     # trained policy yay
                     
@@ -99,7 +131,7 @@ def run_policy_gradients(opt, content_path, all_content_latents, style_path, all
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--content_path', type=str,
-                        default='images/video/frames_855867') #frames_855867 # frames_1778068
+                        default='images_test/frames_855867') #frames_855867 # frames_1778068
     parser.add_argument('--style_path', type=str,
                         default='images/style')
     parser.add_argument('--output_dir', type=str, default='output/frames_855867')

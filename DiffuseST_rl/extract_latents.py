@@ -61,7 +61,7 @@ def get_latents(opt):
 
         if not os.path.exists(check_path):
             print(f"No available latents, start extraction for {content_file}")
-            _, _, content_latents = model.extract_latents(
+            _, content_latents = model.extract_latents(
                 data_path=content_file,
                 num_steps=opt.ddpm_steps,
                 save_path=save_path,
@@ -107,7 +107,6 @@ def get_latents(opt):
                 style_latents = torch.cat(style_latents, dim=0).to(opt.device)
             all_style_latents.append(style_latents)
             
-    return content_path, all_content_latents, style_path, all_style_latents
     for i, (content_latents, content_file) in enumerate(zip(all_content_latents, content_path)):
         print(f"Processing content file and latents: {content_latents.shape}, {content_file}")
         
@@ -118,6 +117,9 @@ def get_latents(opt):
             pnp.run_pnp(content_latents, style_latents, style_file, content_fn=content_file, style_fn=style_file)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+    
+    return content_path, all_content_latents, style_path, all_style_latents
+
 
 def run_rl(content_path, all_content_latents, style_path, all_style_latents, pnp, preprocess_model,num_ppo_epochs=5):
     # Process frames sequentially

@@ -1,10 +1,11 @@
-
 import torch
 import torch.nn.functional as F
 from torchvision import transforms
 from PIL import Image
 from lpips import LPIPS
 from temporal_loss import TemporalConsistencyLossRAFT
+from styleloss import gram_matrix, VGGFeatures
+import torch.nn as nn
 
 class StyleEnv:
     def __init__(self, pnp, 
@@ -17,7 +18,8 @@ class StyleEnv:
                  next_content_latents,
                  next_content_file,
                  content_weight=0.5,
-                 temporal_weight=1.0):
+                 temporal_weight=1.0,
+                 ):
         self.pnp = pnp
         self.scheduler = scheduler
         self.device = device
@@ -37,16 +39,35 @@ class StyleEnv:
         self.temporal_weight = temporal_weight
 
         self.transform = transforms.Compose([
-            transforms.Resize((520, 520)),
+            transforms.Resize((256, 256)),
             transforms.ToTensor(),  # scales to [0, 1]
         ])
         self.curr_content_frame = self.transform(Image.open(self.curr_content_file))
-        # TODO: add content and style loss
+        
+        self.past_stylized_frame = [] # [T, C, H, W]
+
     
     def _compute_temporal_loss(self, stylized_frame):
-        pass
+        temp_loss_fn = TemporalConsistencyLossRAFT(
+        small=True,
+        loss_type='l1',
+        occlusion=True,
+        occ_thresh_px=1.0,
+        device=self.device)
+
+        curr_content_img = Image.open(self.curr_content_file)
+        next_content_img = Image.open(self.next_content_file)
+
+        F_t = self.transform(curr_content_img).unsqueeze(0).to(self.device)
+        F_tp1 = self.transform(next_content_img).unsqueeze(0).to(self.device)
+        S_t = self.transform(stylized_frame).unsqueeze(0).to(self.device) # t
+        # TODO: need past stylized frame
+        S_tp1 = self.transform(stylized_frame).unsqueeze(0).to(self.device) # t+1
+
+        return temp_loss_fn(F_t, F_tp1, S_t, S_tp1)
 
     def _compute_content_loss(self, stylized_frame):
+        stylized_frame = self.transform(stylized_frame)
         loss_fn_alex = LPIPS(net='alex') # best forward scores
         # loss_fn_vgg = lpips.LPIPS(net='vgg') # closer to "traditional" perceptual loss, when used for optimization
 
@@ -54,7 +75,33 @@ class StyleEnv:
         return d.item()  # Convert tensor to Python float
     
     def _compute_style_loss(self, stylized_frame):
-        pass
+        def normalize_batch(batch):
+            mean = batch.new_tensor([0.485, 0.456, 0.406]).view(1, -1, 1, 1)
+            std = batch.new_tensor([0.229, 0.224, 0.225]).view(1, -1, 1, 1)
+            return (batch - mean) / std
+        
+        style_img = Image.open(self.style_file)
+        style_tensor = normalize_batch(self.transform(style_img).unsqueeze(0))
+        stylized_output_tensor = normalize_batch(self.transform(stylized_frame).unsqueeze(0))
+        feature_layers = [1, 6, 11, 20, 29]
+        vgg = VGGFeatures(feature_layers)
+        style_features = vgg(style_tensor)
+        style_grams = [gram_matrix(f) for f in style_features]
+        g_s = style_grams[0]
+        frame_features = vgg(stylized_output_tensor)
+        g_f = gram_matrix(frame_features[0])
+        loss_fn = nn.MSELoss()
+        style_loss = loss_fn(g_f, g_s)
+        return style_loss.item()
+    
+    def _compute_losses(self, stylized_frame):
+        print(type(stylized_frame))
+        content_loss = self._compute_content_loss(stylized_frame)
+        style_loss = self._compute_style_loss(stylized_frame)
+        temporal_loss = self._compute_temporal_loss(stylized_frame)
+        total_loss = content_loss + style_loss + temporal_loss
+        print(f"content_loss: {content_loss}, style_loss: {style_loss}, temporal_loss: {temporal_loss}\n")
+        return content_loss, style_loss, temporal_loss, total_loss
 
     def step(self, delta_z):
         """
@@ -64,8 +111,10 @@ class StyleEnv:
         TODO: consider adding a weight for delta_z to control the strength of the modified noise
         """
         # Add delta_z to the latent at t = T
-        modified_latents = self.curr_content_latents[-1, :, :, :] + delta_z
-        modified_stylized_frame = self.pnp.run_pnp(modified_latents, 
+        modified_latent = self.curr_content_latents[-1, :, :, :] + delta_z
+        content_latents = self.curr_content_latents.clone()
+        content_latents[-1, :, :, :] = modified_latent
+        modified_stylized_frame = self.pnp.run_pnp(content_latents, 
                                         self.style_latents, 
                                         self.style_file, 
                                         content_fn=self.output_modified_fn, 
@@ -76,14 +125,13 @@ class StyleEnv:
                                         self.style_file,
                                         content_fn=self.output_ori_fn,
                                         style_fn=self.style_file)[0]
-        # reward = compute_losses(modified_stylized_frame)
-        # reward_ori = compute_losses(ori_stylized_frame)
-        # reward = reward_modified - reward_ori
-        return 0
-
-
-
         
+        # cache the modified stylized frame
+        self.past_stylized_frame.append(modified_stylized_frame)
 
+        # compute reward
+        content, style, temporal, loss_modified = self._compute_losses(modified_stylized_frame)
+        content_ori, style_ori, temporal_ori, loss_ori = self._compute_losses(ori_stylized_frame)
+        reward = loss_ori - loss_modified
 
-        
+        return reward, content, style, temporal, loss_modified, content_ori, style_ori, temporal_ori, loss_ori
