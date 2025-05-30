@@ -88,8 +88,12 @@ class StyleEnv:
         stylized_output_tensor = normalize_batch(self.transform(stylized_frame).unsqueeze(0))
         feature_layers = [1, 6, 11, 20, 29]
         vgg = VGGFeatures(feature_layers)
-        style_features = vgg(style_tensor)
-        style_grams = [gram_matrix(f) for f in style_features]
+        vgg.eval()
+        for param in vgg.parameters():
+            param.requires_grad = False
+        with torch.no_grad():
+            style_features = vgg(style_tensor)
+            style_grams = [gram_matrix(f) for f in style_features]
         g_s = style_grams[0]
         frame_features = vgg(stylized_output_tensor)
         g_f = gram_matrix(frame_features[0])
