@@ -31,13 +31,12 @@ class LatentPolicy(nn.Module):
 
         self.res = ResBlock(base_ch)
 
-        self.mu_head     = nn.Conv2d(base_ch, latent_channels, kernel_size=1)
-        self.logstd_head = nn.Conv2d(base_ch, latent_channels, kernel_size=1)
+        self.mu_head = nn.Conv2d(base_ch, latent_channels, kernel_size=1)
+        self.gate_param = nn.Parameter(torch.ones(1) * 5.0)  # Initialize to make sigmoid close to 1
+        self.std = nn.Parameter(torch.ones(1) * 0.1)  # Fixed std parameter
     
         nn.init.xavier_uniform_(self.mu_head.weight, gain=0.01)
         nn.init.constant_(self.mu_head.bias, 0)
-        nn.init.xavier_uniform_(self.logstd_head.weight, gain=0.01)
-        nn.init.constant_(self.logstd_head.bias, -1)  # start with small variance
         
     def forward(self, z_t, z_tp1):
         x = torch.cat([z_t, z_tp1], dim=1)
@@ -45,10 +44,12 @@ class LatentPolicy(nn.Module):
         x = F.relu(self.in2(self.conv2(x)))
         x = self.res(x)
 
-        mu = self.mu_head(x)
-        logstd = self.logstd_head(x).clamp(-5, 2)
-        std = logstd.exp()
+        raw_mu = self.mu_head(x)
+        gate = torch.sigmoid(self.gate_param)
+        mu = (1 - gate) * raw_mu
+        std = self.std.expand_as(mu)
         return mu, std
+
     def sample(self, z_t, z_tp1):
         mu, std = self.forward(z_t, z_tp1)
         dist = Normal(mu, std)
