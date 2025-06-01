@@ -17,8 +17,9 @@ class StyleEnv:
                  style_file,
                  prev_content_latents,
                  prev_content_file,
-                 content_weight=0.5,
-                 temporal_weight=1.0,
+                 content_weight=1,
+                 temporal_weight=10.0,
+                 style_weight=0.1,
                  ):
         self.pnp = pnp
         self.scheduler = scheduler
@@ -64,10 +65,11 @@ class StyleEnv:
         F_t = self.transform(prev_content_file).unsqueeze(0).to(self.device)
         F_tp1 = self.transform(curr_content_img).unsqueeze(0).to(self.device)
         S_t = self.transform(prev_stylized_frame).unsqueeze(0).to(self.device) # t
-        # TODO: need past stylized frame
         S_tp1 = self.transform(stylized_frame).unsqueeze(0).to(self.device) # t+1
 
-        return temp_loss_fn(F_t, F_tp1, S_t, S_tp1)
+        with torch.no_grad():
+            temporal_loss = temp_loss_fn(F_t, F_tp1, S_t, S_tp1)
+            return temporal_loss.detach().cpu().item()  # Convert to float
 
     def _compute_content_loss(self, stylized_frame):
         stylized_frame = self.transform(stylized_frame)
@@ -102,7 +104,6 @@ class StyleEnv:
         return style_loss.item()
     
     def _compute_losses(self, stylized_frame, prev_stylized_frame):
-        print(type(stylized_frame))
         content_loss = self._compute_content_loss(stylized_frame)
         style_loss = self._compute_style_loss(stylized_frame)
         temporal_loss = self._compute_temporal_loss(stylized_frame, prev_stylized_frame)

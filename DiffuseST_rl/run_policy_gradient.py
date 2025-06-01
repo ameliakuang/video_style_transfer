@@ -3,6 +3,8 @@ from transformers import CLIPTextModel, CLIPTokenizer, logging
 from diffusers import PNDMScheduler
 from diffusers.pipelines import BlipDiffusionPipeline
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import numpy as np
 
 # suppress partial model loading warning
 logging.set_verbosity_error()
@@ -23,78 +25,174 @@ from extract_latents import get_latents
 from policy_network import LatentPolicy
 from style_env import StyleEnv
 
-def run_policy_gradients(content_path, all_content_latents, style_path, all_style_latents, num_epochs, lr, temporal_weight, content_weight):
-    model_key = "Salesforce/blipdiffusion"
+def evaluate_policy(policy, content_latents, style_latents, content_file, style_file, prev_modified_stylized_frame, prev_ori_stylized_frame, pnp, scheduler, device, save_dir=None):
+    """
+    Evaluate the policy on a single content-style pair
+    Returns:
+        Dictionary containing all evaluation metrics
+    """
+    style_env = StyleEnv(pnp, scheduler, device, content_latents, style_latents, 
+                        content_file, style_file, content_latents, content_file)
+    
+    with torch.no_grad():
+        delta_z, _ = policy.sample(content_latents[-1][None, :, :, :], content_latents[-1][None, :, :, :])
+        reward, content_loss, style_loss, temporal_loss, loss_modified, _, _, _, _, stylized_frame, ori_stylized_frame = style_env.step(delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame)
+    
+    if save_dir:
+        save_path = os.path.join(save_dir, f'eval_frame_{os.path.basename(content_file)}_{os.path.basename(style_file)}')
+        stylized_frame.save(save_path)
+    
+    # Calculate additional evaluation metrics
+    # is_score = calculate_is_score(stylized_frame)
+    # fvd_score = calculate_fvd_score(stylized_frame)
 
+    is_score = 0
+    fvd_score = 0
+    
+    metrics = {
+        'reward': reward,
+        'content_loss': content_loss,
+        'style_loss': style_loss,
+        'temporal_loss': temporal_loss,
+        'total_loss': loss_modified,
+        # 'is_score': is_score,
+        # 'fvd_score': fvd_score
+    }
+    
+    return metrics, stylized_frame, ori_stylized_frame
+
+def plot_metrics(train_metrics, train_eval_metrics, test_eval_metrics, save_dir):
+    """
+    Plot training and evaluation metrics
+    Args:
+        train_metrics: Dictionary containing lists of training metrics
+        train_eval_metrics: Dictionary containing lists of evaluation metrics on training set
+        test_eval_metrics: Dictionary containing lists of evaluation metrics on test set
+    """
+    plt.figure(figsize=(20, 15))
+
+    # Plot training metrics
+    plt.subplot(3, 2, 1)
+    plt.plot(train_metrics['epoch'], train_metrics['reward'], label='Training Reward')
+    plt.xlabel('Epoch')
+    plt.ylabel('Reward')
+    plt.title('Training Reward')
+    plt.legend()
+    plt.grid(True)
+
+    # Plot training vs evaluation rewards
+    plt.subplot(3, 2, 2)
+    plt.plot(train_metrics['epoch'], train_metrics['reward'], label='Training', color='blue')
+    plt.plot(train_eval_metrics['epoch'], train_eval_metrics['reward'], label='Train Eval', color='green', marker='o')
+    plt.plot(test_eval_metrics['epoch'], test_eval_metrics['reward'], label='Test Eval', color='red', marker='o')
+    plt.xlabel('Epoch')
+    plt.ylabel('Reward')
+    plt.title('Training vs Evaluation Rewards')
+    plt.legend()
+    plt.grid(True)
+
+    # Plot evaluation metrics
+    metric_names = ['content_loss', 'style_loss', 'temporal_loss', 'total_loss']
+    for idx, metric in enumerate(metric_names):
+        plt.subplot(3, 2, idx + 3)
+        plt.plot(train_eval_metrics['epoch'], train_eval_metrics[metric], label='Train Eval', marker='o')
+        plt.plot(test_eval_metrics['epoch'], test_eval_metrics[metric], label='Test Eval', marker='o')
+        plt.xlabel('Epoch')
+        plt.ylabel(metric.replace('_', ' ').title())
+        plt.title(f'{metric.replace("_", " ").title()} over Time')
+        plt.legend()
+        plt.grid(True)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, 'all_metrics.png'))
+    plt.close()
+
+def run_policy_gradients(train_content_paths, train_content_latents,
+                        test_content_paths, test_content_latents,
+                        style_paths, all_style_latents, output_dir,
+                        num_epochs, lr, temporal_weight, content_weight, style_weight):
+    model_key = "Salesforce/blipdiffusion"
     blip_diffusion_pipe = BLIP.from_pretrained(model_key, torch_dtype=torch.float16).to(opt.device)
     
     scheduler = PNDMScheduler.from_pretrained(model_key, subfolder="scheduler")
     scheduler.set_timesteps(opt.ddpm_steps)
-    content_path = Path(opt.content_path)
-    print(f"Content path: {content_path}")
-    content_path = [f for f in content_path.glob('*')]
-    print(f"Content path: {content_path}")
-    style_path = Path(opt.style_path)
-    style_path = [f for f in style_path.glob('*')]
+    
+    # Create organized output directory structure
+    train_eval_path = os.path.join(output_dir, "train_eval")
+    test_eval_path = os.path.join(output_dir, "test_eval")
+    model_save_path = os.path.join(output_dir, "models")
+    metrics_save_path = os.path.join(output_dir, "metrics")
+    
+    for path in [train_eval_path, test_eval_path, model_save_path, metrics_save_path]:
+        os.makedirs(path, exist_ok=True)
 
-    extraction_path = "latents_reverse" if opt.extract_reverse else "latents_forward"
-    base_save_path = os.path.join(opt.output_dir, extraction_path)
-    os.makedirs(base_save_path, exist_ok=True)
     pnp = PNP(blip_diffusion_pipe, opt)
 
     policy = LatentPolicy().to(opt.device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=opt.lr)
 
-    all_epoch_policy_losses = []
-    all_epoch_content_losses = []
-    all_epoch_style_losses = []
-    all_epoch_temporal_losses = []
-    all_epoch_total_losses = []
-    all_epoch_reward_history = []
+    # training metrics
+    train_metrics = {
+        'epoch': [],
+        'reward': [],   
+        'content_loss': [],
+        'style_loss': [],
+        'temporal_loss': [],
+        'total_loss': [],
+        'policy_loss': [],
+        'is_score': [],
+        'fvd_score': []
+    }
     
-    # start RL training loop 
+    # evaluation metrics
+    train_eval_metrics = {
+        'epoch': [],
+        'reward': [],
+        'content_loss': [],
+        'style_loss': [],
+        'temporal_loss': [],
+        'total_loss': [],
+        'is_score': [],
+        'fvd_score': []
+    }
+
+    test_eval_metrics = {
+        'epoch': [],
+        'reward': [],
+        'content_loss': [],
+        'style_loss': [],
+        'temporal_loss': [],
+        'total_loss': [],
+        'is_score': [],
+        'fvd_score': []
+    }
+    
+    best_reward = float('-inf')
+    eval_interval = max(1, num_epochs // 2)
+
+    # Training loop
     for e in range(num_epochs):
         print(f"Epoch {e + 1}/{num_epochs}")
-        epoch_policy_losses = []
-        epoch_content_losses = []
-        epoch_style_losses = []
-        epoch_temporal_losses = []
-        epoch_total_losses = []
-        epoch_reward_history = []
+        epoch_metrics = {key: [] for key in train_metrics.keys()}
         epoch_modified_stylized_frames = []
         epoch_ori_stylized_frames = []
 
-        # per epoch i process all frames
-        for i, (curr_content_latents, curr_content_file) in enumerate(zip(all_content_latents, content_path)):
-            print(f"Processing content file and latents: {curr_content_latents.shape}, {curr_content_file}")
-            
+        # Training
+        for i, (curr_content_latents, curr_content_file) in enumerate(zip(train_content_latents, train_content_paths)):
             if i == 0:
                 continue
-            prev_content_latents = all_content_latents[i-1]
-            prev_content_file = content_path[i-1]
+            prev_content_latents = train_content_latents[i-1]
+            prev_content_file = train_content_paths[i-1]
 
-            for style_latents, style_file in zip(all_style_latents, style_path):
-                print(f"in run_policy_gradients style_file{style_file}")
-                style_env = StyleEnv(pnp,
-                                    scheduler,
-                                    opt.device,
-                                    curr_content_latents,
-                                    style_latents,
-                                    curr_content_file,
-                                    style_file,
-                                    prev_content_latents,
-                                    prev_content_file)
-                print(f"type(curr_content_latents): {type(curr_content_latents)}")
-                print(f"curr_content_latents.size(): {curr_content_latents.size()}")
-                print(f"type(prev_content_latents): {type(prev_content_latents)}")
-                print(f"prev_content_latents.size(): {prev_content_latents.size()}")
-                # obtain delta_z
-                delta_z, log_prob = policy.sample(prev_content_latents[-1][None, :, :, :], curr_content_latents[-1][None, :, :, :])
-                print(f"type(delta_z): {type(delta_z)}")
-                print(f"delta_z.size(): {delta_z.size()}")
-                print(f"type(log_prob): {type(log_prob)}")
-                print(f"log_prob.size(): {log_prob.size()}")
-
+            for style_latents, style_file in zip(all_style_latents, style_paths):
+                style_env = StyleEnv(pnp, scheduler, opt.device,
+                                    curr_content_latents, style_latents,
+                                    curr_content_file, style_file,
+                                    prev_content_latents, prev_content_file)
+                
+                delta_z, log_prob = policy.sample(prev_content_latents[-1][None, :, :, :], 
+                                                curr_content_latents[-1][None, :, :, :])
+                
                 # obtain reward
                 prev_modified_stylized_frame = None
                 prev_ori_stylized_frame = None
@@ -102,49 +200,134 @@ def run_policy_gradients(content_path, all_content_latents, style_path, all_styl
                     prev_modified_stylized_frame = epoch_modified_stylized_frames[-1]
                     prev_ori_stylized_frame = epoch_ori_stylized_frames[-1]
                 reward, content, style, temporal, loss_modified, content_ori, style_ori, temporal_ori, loss_ori, modified_stylized_frame, ori_stylized_frame = style_env.step(delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame)
+                
                 # update policy
                 policy_loss = -log_prob[-1] * reward
-                print(f'type(policy_loss): {type(policy_loss)}')
-                print(f'policy_loss.size(): {policy_loss.size()}')
                 optimizer.zero_grad()
                 policy_loss.backward()
                 optimizer.step()
 
-                epoch_policy_losses.append(policy_loss)
-                epoch_content_losses.append(content)
-                epoch_style_losses.append(style)
-                epoch_temporal_losses.append(temporal)
-                epoch_total_losses.append(loss_modified)
-                epoch_reward_history.append(reward)
+                epoch_metrics['policy_loss'].append(policy_loss.detach().cpu().item())
+                epoch_metrics['content_loss'].append(content)
+                epoch_metrics['style_loss'].append(style)
+                epoch_metrics['temporal_loss'].append(temporal)
+                epoch_metrics['total_loss'].append(loss_modified)
+                epoch_metrics['reward'].append(reward)
+
                 epoch_modified_stylized_frames.append(modified_stylized_frame)
                 epoch_ori_stylized_frames.append(ori_stylized_frame)
 
-        all_epoch_policy_losses.append(epoch_policy_losses)
-        all_epoch_content_losses.append(epoch_content_losses)
-        all_epoch_style_losses.append(epoch_style_losses)
-        all_epoch_temporal_losses.append(epoch_temporal_losses)
-        all_epoch_total_losses.append(epoch_total_losses)
-        all_epoch_reward_history.append(epoch_reward_history)
+        # Average and store training metrics - all metrics should be CPU values now
+        for key in train_metrics.keys():
+            if key == 'epoch':
+                train_metrics[key].append(e)
+            else:
+                train_metrics[key].append(np.mean(epoch_metrics[key]))
 
-    # trained policy yay
+        # Evaluation
+        if (e + 1) % eval_interval == 0 or e == num_epochs - 1:
+            print(f"\nRunning evaluation at epoch {e + 1}")
+            
+            # Evaluate on training set
+            train_eval_save_dir = os.path.join(train_eval_path, f'epoch_{e+1}')
+            os.makedirs(train_eval_save_dir, exist_ok=True)
+            
+            epoch_train_eval_metrics = {key: [] for key in train_eval_metrics.keys()}
+            
+            for i, (content_latents, content_file) in enumerate(zip(train_content_latents, train_content_paths)):
+                for style_latents, style_file in zip(all_style_latents, style_paths):
+                    metrics, modified_stylized_frame, ori_stylized_frame = evaluate_policy(
+                        policy, content_latents, style_latents,
+                        content_file, style_file, prev_modified_stylized_frame, prev_ori_stylized_frame, pnp, scheduler,
+                        opt.device, train_eval_save_dir
+                    )
                     
+                    for key in metrics.keys():
+                        epoch_train_eval_metrics[key].append(metrics[key])
+                    
+                    epoch_train_eval_metrics['epoch'].append(e)
+            
+            # Store training evaluation metrics
+            for key in train_eval_metrics.keys():
+                train_eval_metrics[key].append(np.mean(epoch_train_eval_metrics[key]))
+            
+            # Evaluate on test set
+            test_eval_save_dir = os.path.join(test_eval_path, f'epoch_{e+1}')
+            os.makedirs(test_eval_save_dir, exist_ok=True)
+            
+            epoch_test_eval_metrics = {key: [] for key in test_eval_metrics.keys()}
 
+            epoch_test_modified_stylized_frames = []
+            epoch_test_ori_stylized_frames = []
+            
+            for i, (content_latents, content_file) in enumerate(zip(test_content_latents, test_content_paths)):
+                for style_latents, style_file in zip(all_style_latents, style_paths):
+                    
+                    if i == 0:
+                        prev_test_modified_stylized_frame = None
+                        prev_test_ori_stylized_frame = None
+                    else:
+                        prev_test_modified_stylized_frame = epoch_test_modified_stylized_frames[-1]
+                        prev_test_ori_stylized_frame = epoch_test_ori_stylized_frames[-1]
+                    
+                    metrics, modified_stylized_frame, ori_stylized_frame = evaluate_policy(
+                        policy, content_latents, style_latents,
+                        content_file, style_file, prev_test_modified_stylized_frame, prev_test_ori_stylized_frame, pnp, scheduler,
+                        opt.device, test_eval_save_dir
+                    )
+                    
+                    for key in metrics.keys():
+                        epoch_test_eval_metrics[key].append(metrics[key])
+                    
+                    epoch_test_eval_metrics['epoch'].append(e)
 
+                    epoch_test_modified_stylized_frames.append(modified_stylized_frame)
+                    epoch_test_ori_stylized_frames.append(ori_stylized_frame)
+            
+            # Store test evaluation metrics
+            for key in test_eval_metrics.keys():
+                test_eval_metrics[key].append(np.mean(epoch_test_eval_metrics[key]))
+            
+            # Print evaluation results
+            print("\nTraining Set Evaluation:")
+            for k, v in train_eval_metrics.items():
+                print(f"{k}: {v[-1]:.4f}")
+            
+            print("\nTest Set Evaluation:")
+            for k, v in test_eval_metrics.items():
+                print(f"{k}: {v[-1]:.4f}")
+            
+            # Save best model based on test set reward
+            if test_eval_metrics['reward'][-1] > best_reward:
+                best_reward = test_eval_metrics['reward'][-1]
+                torch.save({
+                    'epoch': e + 1,
+                    'model_state_dict': policy.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'train_metrics': train_metrics,
+                    'test_metrics': test_eval_metrics,
+                }, os.path.join(model_save_path, 'best_policy_model.pth'))
+            
+            # Save latest model
+            torch.save({
+                'epoch': e + 1,
+                'model_state_dict': policy.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'train_metrics': train_metrics,
+                'test_metrics': test_eval_metrics,
+            }, os.path.join(model_save_path, 'latest_policy_model.pth'))
 
+    # Plot and save metrics
+    plot_metrics(train_metrics, train_eval_metrics, test_eval_metrics, metrics_save_path)
 
-
-
-
-
-
+    return policy
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--content_path', type=str,
-                        default='images_test/frames_855867') #frames_855867 # frames_1778068
-    parser.add_argument('--style_path', type=str,
-                        default='images/style')
-    parser.add_argument('--output_dir', type=str, default='output/frames_855867')
+    parser.add_argument('--train_content_path', type=str, default='images_mini/frames_1171471')
+    parser.add_argument('--test_content_path', type=str, default='images_mini/frames_855867')
+    parser.add_argument('--style_path', type=str, default='images/style')
+    parser.add_argument('--output_dir', type=str, default='output/')
     parser.add_argument('--sd_version', type=str, default='2.1', choices=['1.5', '2.0', '2.1'],
                         help="stable diffusion version")
     parser.add_argument('--device', type=str, default="cuda")
@@ -158,22 +341,32 @@ if __name__ == "__main__":
     parser.add_argument('--extract-reverse', default=False, action='store_true', help="extract features during the denoising process")
     
     # RL-specific arguments
-    parser.add_argument('--num_epochs', type=int, default=5,
+    parser.add_argument('--num_epochs', type=int, default=2,
                         help='Number of policy gradient optimization epochs')
     parser.add_argument('--lr', type=float, default=1e-4,
                         help='Learning rate for policy gradient optimization')
-    parser.add_argument('--temporal_weight', type=float, default=1.0,
+    parser.add_argument('--temporal_weight', type=float, default=1,
                         help='Weight for temporal consistency loss')
-    parser.add_argument('--content_weight', type=float, default=0.5,
+    parser.add_argument('--content_weight', type=float, default=1,
                         help='Weight for content preservation loss')
+    parser.add_argument('--style_weight', type=float, default=1,
+                        help='Weight for style preservation loss')
     
     opt = parser.parse_args()
 
-    content_path, all_content_latents, style_path, all_style_latents = get_latents(opt)
+    # Get train and test data
+    train_content_paths, train_content_latents, style_paths, style_latents = get_latents(opt, opt.train_content_path, mode="train")
+    test_content_paths, test_content_latents, _, _ = get_latents(opt, opt.test_content_path, mode="test")
 
-
-    run_policy_gradients(content_path, all_content_latents, style_path, all_style_latents,
-           num_epochs=opt.num_epochs,
-           lr=opt.lr,
-           temporal_weight=opt.temporal_weight,
-           content_weight=opt.content_weight)
+    # Run training
+    trained_policy = run_policy_gradients(
+        train_content_paths, train_content_latents,
+        test_content_paths, test_content_latents,
+        style_paths, style_latents,
+        output_dir=opt.output_dir,
+        num_epochs=opt.num_epochs,
+        lr=opt.lr,
+        temporal_weight=opt.temporal_weight,
+        content_weight=opt.content_weight,
+        style_weight=opt.style_weight
+    )

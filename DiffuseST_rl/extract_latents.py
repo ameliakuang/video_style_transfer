@@ -20,49 +20,50 @@ from preprocess_style import get_timesteps, Preprocess
 from pnp_style import PNP, BLIP
 
 
-def get_latents(opt):
-    model_key = "Salesforce/blipdiffusion"
+def extract_latents_for_path(model, path, scheduler, opt, base_save_path, is_style=False):
+    """
+    Extract latents for a given path (either content or style)
+    Args:
+        model: Preprocess model
+        path: Path to process
+        scheduler: Scheduler to use
+        opt: Options
+        base_save_path: Base path to save latents
+        is_style: Whether processing style images (affects number of timesteps)
+    Returns:
+        tuple: (file_paths, latents)
+    """
+    all_paths = [f for f in Path(path).glob('*')]
+    all_latents = []
 
-    blip_diffusion_pipe = BLIP.from_pretrained(model_key, torch_dtype=torch.float16).to(opt.device)
-    
-    scheduler = PNDMScheduler.from_pretrained(model_key, subfolder="scheduler")
-    scheduler.set_timesteps(opt.ddpm_steps)
-    content_path = Path(opt.content_path)
-    print(f"Content path: {content_path}")
-    content_path = [f for f in content_path.glob('*')]
-    print(f"Content path: {content_path}")
-    style_path = Path(opt.style_path)
-    style_path = [f for f in style_path.glob('*')]
-
-    extraction_path = "latents_reverse" if opt.extract_reverse else "latents_forward"
-    base_save_path = os.path.join(opt.output_dir, extraction_path)
-    os.makedirs(base_save_path, exist_ok=True)
-
-    pnp = PNP(blip_diffusion_pipe, opt)
-
-    all_content_latents = []
-    for content_file in content_path:
-        print(f"Processing content file: {content_file}")
+    for file in all_paths:
+        print(f"Processing {'style' if is_style else 'content'} file: {file}")
+        
+        # Get timesteps
         timesteps_to_save, num_inference_steps = get_timesteps(
             scheduler, num_inference_steps=opt.ddpm_steps,
             strength=1.0,
             device=opt.device
         )
 
-        seed_everything(opt.seed)
-        if opt.steps_to_save < opt.ddpm_steps:
+        if is_style:
+            timesteps_to_save = timesteps_to_save[-int(opt.ddpm_steps*opt.alpha):]
+        elif opt.steps_to_save < opt.ddpm_steps:
             timesteps_to_save = timesteps_to_save[-opt.steps_to_save:]
 
-        model = Preprocess(blip_diffusion_pipe, opt.device, scheduler=scheduler, sd_version=opt.sd_version, hf_key=None)
-        
-        save_path = os.path.join(base_save_path, os.path.splitext(os.path.basename(content_file))[0])
+        # Setup save path
+        save_path = os.path.join(base_save_path, os.path.splitext(os.path.basename(file))[0])
         os.makedirs(save_path, exist_ok=True)
         check_path = os.path.join(save_path, 'noisy_latents_0.pt')
 
+        # Extract or load latents
         if not os.path.exists(check_path):
-            print(f"No available latents, start extraction for {content_file}")
-            _, content_latents = model.extract_latents(
-                data_path=content_file,
+            print(f"No available latents, start extraction for {file}")
+            if is_style:
+                model.scheduler.set_timesteps(opt.ddpm_steps)
+            
+            _, latents = model.extract_latents(
+                data_path=file,
                 num_steps=opt.ddpm_steps,
                 save_path=save_path,
                 timesteps_to_save=timesteps_to_save,
@@ -70,55 +71,59 @@ def get_latents(opt):
                 extract_reverse=opt.extract_reverse
             )
         else:
-            content_latents = []
-            for t in range(opt.ddpm_steps):
+            num_steps = int(opt.ddpm_steps * opt.alpha) if is_style else opt.ddpm_steps
+            latents = []
+            for t in range(num_steps):
                 latents_path = os.path.join(save_path, f'noisy_latents_{t}.pt')
                 if os.path.exists(latents_path):
-                    content_latents.append(torch.load(latents_path))
-            content_latents = torch.cat(content_latents, dim=0).to(opt.device)
-        all_content_latents.append(content_latents)
-
-        all_style_latents = []
-        for style_file in style_path:
-            
-            save_path = os.path.join(base_save_path, os.path.splitext(os.path.basename(style_file))[0])
-            os.makedirs(save_path, exist_ok=True)
-            check_path = os.path.join(save_path, f'noisy_latents_0.pt')
-            if not os.path.exists(check_path):
-                print(f"No available latents, start extraction for {style_file}")
-                timesteps_to_save = timesteps_to_save[-int(opt.ddpm_steps*opt.alpha):]
-                model.scheduler.set_timesteps(opt.ddpm_steps)
-
-                _, _, style_latents = model.extract_latents(
-                    data_path=style_file,
-                    num_steps=opt.ddpm_steps,
-                    save_path=save_path,
-                    timesteps_to_save=timesteps_to_save,
-                    inversion_prompt=opt.inversion_prompt,
-                    extract_reverse=opt.extract_reverse
-                )
-
-            else:
-                style_latents = []
-                for t in range(int(opt.ddpm_steps * opt.alpha)):
-                    latents_path = os.path.join(save_path, f'noisy_latents_{t}.pt')
-                    if os.path.exists(latents_path):
-                        style_latents.append(torch.load(latents_path))
-                style_latents = torch.cat(style_latents, dim=0).to(opt.device)
-            all_style_latents.append(style_latents)
-            
-    # for i, (content_latents, content_file) in enumerate(zip(all_content_latents, content_path)):
-    #     print(f"Processing content file and latents: {content_latents.shape}, {content_file}")
+                    latents.append(torch.load(latents_path))
+            latents = torch.cat(latents, dim=0).to(opt.device)
         
-    #     if i < len(all_content_latents) - 1:
-    #         next_content_latents = all_content_latents[i+1]
+        all_latents.append(latents)
 
-    #     for style_latents, style_file in zip(all_style_latents, style_path):
-    #         pnp.run_pnp(content_latents, style_latents, style_file, content_fn=content_file, style_fn=style_file)
-    #         if torch.cuda.is_available():
-    #             torch.cuda.empty_cache()
+    return all_paths, all_latents
+
+def get_latents(opt, content_path=None, mode="train"):
+    """
+    Get latents for content and style images
+    Args:
+        opt: Options object
+        content_path: Optional specific content path (if None, uses opt.content_path)
+        mode: Either "train" or "test" to organize output directories
+    Returns:
+        tuple: (content_paths, content_latents, style_paths, style_latents)
+    """
+    model_key = "Salesforce/blipdiffusion"
+    blip_diffusion_pipe = BLIP.from_pretrained(model_key, torch_dtype=torch.float16).to(opt.device)
+    scheduler = PNDMScheduler.from_pretrained(model_key, subfolder="scheduler")
+    scheduler.set_timesteps(opt.ddpm_steps)
+
+    # Setup paths and model
+    content_path = content_path if content_path is not None else opt.content_path
+    extraction_path = "latents_reverse" if opt.extract_reverse else "latents_forward"
     
-    return content_path, all_content_latents, style_path, all_style_latents
+    # Create mode-specific output directories
+    base_save_path = os.path.join(opt.output_dir, mode, extraction_path)
+    os.makedirs(base_save_path, exist_ok=True)
+
+    # Initialize model
+    seed_everything(opt.seed)
+    model = Preprocess(blip_diffusion_pipe, opt.device, scheduler=scheduler, sd_version=opt.sd_version, hf_key=None)
+    pnp = PNP(blip_diffusion_pipe, opt)
+
+    # Extract content latents
+    content_paths, content_latents = extract_latents_for_path(
+        model, content_path, scheduler, opt, base_save_path, is_style=False
+    )
+
+    # Extract style latents - store in common directory
+    style_save_path = os.path.join(opt.output_dir, "style", extraction_path)
+    os.makedirs(style_save_path, exist_ok=True)
+    style_paths, style_latents = extract_latents_for_path(
+        model, opt.style_path, scheduler, opt, style_save_path, is_style=True
+    )
+
+    return content_paths, content_latents, style_paths, style_latents
 
 
 def run_rl(content_path, all_content_latents, style_path, all_style_latents, pnp, preprocess_model,num_ppo_epochs=5):
