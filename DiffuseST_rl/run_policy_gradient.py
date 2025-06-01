@@ -43,7 +43,10 @@ def evaluate_policy(policy, content_latents, style_latents, content_file, style_
         stylized_frame.save(save_path)
     
     # Calculate additional evaluation metrics
-    # is_score = calculate_is_score(stylized_frame)
+    # reference_frame = Image.open(content_file).convert("RGB")
+    # clip_score = calculate_clip_score(stylized_frame, reference_frame)
+    # stylized_ori = Image.open(prev_modified_stylized_frame).convert("RGB")
+    # clip_score_ori = calculate_clip_score(stylized_ori, reference_frame)
     # fvd_score = calculate_fvd_score(stylized_frame)
 
     is_score = 0
@@ -287,6 +290,9 @@ def run_policy_gradients(train_content_paths, train_content_latents,
                     epoch_test_modified_stylized_frames.append(modified_stylized_frame)
                     epoch_test_ori_stylized_frames.append(ori_stylized_frame)
             
+            # baseline_sims = compute_clip_similarities(epoch_test_modified_stylized_frames)
+            # rl_sims = compute_clip_similarities(epoch_test_ori_stylized_frames)
+
             # Store test evaluation metrics
             for key in test_eval_metrics.keys():
                 test_eval_metrics[key].append(np.mean(epoch_test_eval_metrics[key]))
@@ -373,3 +379,6 @@ if __name__ == "__main__":
         content_weight=opt.content_weight,
         style_weight=opt.style_weight
     )
+    
+    
+
