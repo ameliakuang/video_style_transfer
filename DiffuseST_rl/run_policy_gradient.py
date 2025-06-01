@@ -188,7 +188,10 @@ def run_policy_gradients(train_content_paths, train_content_latents,
                 style_env = StyleEnv(pnp, scheduler, opt.device,
                                     curr_content_latents, style_latents,
                                     curr_content_file, style_file,
-                                    prev_content_latents, prev_content_file)
+                                    prev_content_latents, prev_content_file,
+                                    content_weight=content_weight,
+                                    temporal_weight=temporal_weight,
+                                    style_weight=style_weight)
                 
                 delta_z, log_prob = policy.sample(prev_content_latents[-1][None, :, :, :], 
                                                 curr_content_latents[-1][None, :, :, :])
@@ -345,11 +348,11 @@ if __name__ == "__main__":
                         help='Number of policy gradient optimization epochs')
     parser.add_argument('--lr', type=float, default=1e-4,
                         help='Learning rate for policy gradient optimization')
-    parser.add_argument('--temporal_weight', type=float, default=1,
+    parser.add_argument('--temporal_weight', type=float, default=10,
                         help='Weight for temporal consistency loss')
     parser.add_argument('--content_weight', type=float, default=1,
                         help='Weight for content preservation loss')
-    parser.add_argument('--style_weight', type=float, default=1,
+    parser.add_argument('--style_weight', type=float, default=10,
                         help='Weight for style preservation loss')
     
     opt = parser.parse_args()

@@ -38,6 +38,7 @@ class StyleEnv:
         
         self.content_weight = content_weight
         self.temporal_weight = temporal_weight
+        self.style_weight = style_weight
 
         self.transform = transforms.Compose([
             transforms.Resize((256, 256)),
@@ -107,8 +108,9 @@ class StyleEnv:
         content_loss = self._compute_content_loss(stylized_frame)
         style_loss = self._compute_style_loss(stylized_frame)
         temporal_loss = self._compute_temporal_loss(stylized_frame, prev_stylized_frame)
-        total_loss = content_loss + style_loss + temporal_loss
-        print(f"content_loss: {content_loss}, style_loss: {style_loss}, temporal_loss: {temporal_loss}\n")
+        total_loss = self.content_weight *content_loss + self.style_weight * style_loss + self.temporal_weight * temporal_loss
+        print(f"unweighted content_loss: {content_loss}, style_loss: {style_loss}, temporal_loss: {temporal_loss}\n")
+        print(f"weighted content_loss: {self.content_weight * content_loss}, style_loss: {self.style_weight * style_loss}, temporal_loss: {self.temporal_weight * temporal_loss}\n")
         return content_loss, style_loss, temporal_loss, total_loss
 
     def step(self, delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame):
