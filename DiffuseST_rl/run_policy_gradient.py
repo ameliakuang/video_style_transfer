@@ -43,7 +43,10 @@ def evaluate_policy(policy, content_latents, style_latents, content_file, style_
         stylized_frame.save(save_path)
     
     # Calculate additional evaluation metrics
-    # is_score = calculate_is_score(stylized_frame)
+    # reference_frame = Image.open(content_file).convert("RGB")
+    # clip_score = calculate_clip_score(stylized_frame, reference_frame)
+    # stylized_ori = Image.open(prev_modified_stylized_frame).convert("RGB")
+    # clip_score_ori = calculate_clip_score(stylized_ori, reference_frame)
     # fvd_score = calculate_fvd_score(stylized_frame)
 
     is_score = 0
