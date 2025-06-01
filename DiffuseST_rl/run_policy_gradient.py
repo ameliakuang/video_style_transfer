@@ -287,6 +287,9 @@ def run_policy_gradients(train_content_paths, train_content_latents,
                     epoch_test_modified_stylized_frames.append(modified_stylized_frame)
                     epoch_test_ori_stylized_frames.append(ori_stylized_frame)
             
+            # baseline_sims = compute_clip_similarities(epoch_test_modified_stylized_frames)
+            # rl_sims = compute_clip_similarities(epoch_test_ori_stylized_frames)
+
             # Store test evaluation metrics
             for key in test_eval_metrics.keys():
                 test_eval_metrics[key].append(np.mean(epoch_test_eval_metrics[key]))
@@ -373,3 +376,6 @@ if __name__ == "__main__":
         content_weight=opt.content_weight,
         style_weight=opt.style_weight
     )
+    
+    
+

@@ -29,5 +29,10 @@ def calculate_clip_score(stylized_frame, reference_frame):
     similarity = torch.cosine_similarity(embeddings[0:1], embeddings[1:2]).item()
     return similarity
 
-
+def compute_clip_similarities(frames):
+    sims = []
+    for t in range(len(frames) - 1):
+        sim = calculate_clip_score(frames[t], frames[t + 1])
+        sims.append(sim)
+    return sims
 
