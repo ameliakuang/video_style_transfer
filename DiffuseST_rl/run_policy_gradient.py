@@ -5,6 +5,7 @@ from diffusers.pipelines import BlipDiffusionPipeline
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
+from datetime import datetime
 
 # suppress partial model loading warning
 logging.set_verbosity_error()
@@ -362,6 +363,24 @@ if __name__ == "__main__":
                         help='Weight for style preservation loss')
     
     opt = parser.parse_args()
+
+    # Get video name from train_content_path (or another relevant arg)
+    video_name = os.path.basename(opt.train_content_path.rstrip('/'))
+
+    # Get current time
+    now = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    # Sanitize lr for folder name
+    lr_str = str(opt.lr).replace('.', 'p').replace('-', 'm')
+
+    # Build subdirectory name
+    subdir = f"exp_{now}_epochs{opt.num_epochs}_lr{lr_str}_video{video_name}"
+
+    # Update output_dir to include the subdirectory
+    opt.output_dir = os.path.join(opt.output_dir, subdir)
+    os.makedirs(opt.output_dir, exist_ok=True)
+
+
 
     # Get train and test data
     train_content_paths, train_content_latents, style_paths, style_latents = get_latents(opt, opt.train_content_path, mode="train")
