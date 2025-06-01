@@ -113,7 +113,7 @@ def plot_metrics(train_metrics, train_eval_metrics, test_eval_metrics, save_dir)
 
 def run_policy_gradients(train_content_paths, train_content_latents,
                         test_content_paths, test_content_latents,
-                        style_paths, all_style_latents, output_dir,
+                        style_paths, all_style_latents, latents_dir,output_dir,
                         num_epochs, lr, temporal_weight, content_weight, style_weight):
     model_key = "Salesforce/blipdiffusion"
     blip_diffusion_pipe = BLIP.from_pretrained(model_key, torch_dtype=torch.float16).to(opt.device)
@@ -338,6 +338,7 @@ if __name__ == "__main__":
     parser.add_argument('--test_content_path', type=str, default='images_mini/frames_855867')
     parser.add_argument('--style_path', type=str, default='images/style')
     parser.add_argument('--output_dir', type=str, default='output/')
+    parser.add_argument('--latents_dir', type=str, default='latents/', help='Directory to store/load latents')
     parser.add_argument('--sd_version', type=str, default='2.1', choices=['1.5', '2.0', '2.1'],
                         help="stable diffusion version")
     parser.add_argument('--device', type=str, default="cuda")
@@ -362,6 +363,8 @@ if __name__ == "__main__":
     parser.add_argument('--style_weight', type=float, default=10,
                         help='Weight for style preservation loss')
     
+
+    
     opt = parser.parse_args()
 
     # Get video name from train_content_path (or another relevant arg)
@@ -380,6 +383,9 @@ if __name__ == "__main__":
     opt.output_dir = os.path.join(opt.output_dir, subdir)
     os.makedirs(opt.output_dir, exist_ok=True)
 
+    latents_dir = opt.latents_dir
+    os.makedirs(latents_dir, exist_ok=True)
+
 
 
     # Get train and test data
@@ -391,6 +397,7 @@ if __name__ == "__main__":
         train_content_paths, train_content_latents,
         test_content_paths, test_content_latents,
         style_paths, style_latents,
+        latents_dir=opt.latents_dir,
         output_dir=opt.output_dir,
         num_epochs=opt.num_epochs,
         lr=opt.lr,

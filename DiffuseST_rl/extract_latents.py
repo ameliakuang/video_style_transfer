@@ -103,7 +103,7 @@ def get_latents(opt, content_path=None, mode="train"):
     extraction_path = "latents_reverse" if opt.extract_reverse else "latents_forward"
     
     # Create mode-specific output directories
-    base_save_path = os.path.join(opt.output_dir, mode, extraction_path)
+    base_save_path = os.path.join(opt.latents_dir, mode, extraction_path)
     os.makedirs(base_save_path, exist_ok=True)
 
     # Initialize model
@@ -117,7 +117,7 @@ def get_latents(opt, content_path=None, mode="train"):
     )
 
     # Extract style latents - store in common directory
-    style_save_path = os.path.join(opt.output_dir, "style", extraction_path)
+    style_save_path = os.path.join(opt.latents_dir, "style", extraction_path)
     os.makedirs(style_save_path, exist_ok=True)
     style_paths, style_latents = extract_latents_for_path(
         model, opt.style_path, scheduler, opt, style_save_path, is_style=True
