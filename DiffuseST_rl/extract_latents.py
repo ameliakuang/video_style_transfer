@@ -36,6 +36,8 @@ def extract_latents_for_path(model, path, scheduler, opt, base_save_path, is_sty
     all_paths = [f for f in Path(path).glob('*')]
     all_latents = []
 
+    print(all_paths)
+
     for file in all_paths:
         print(f"Processing {'style' if is_style else 'content'} file: {file}")
         
@@ -83,7 +85,7 @@ def extract_latents_for_path(model, path, scheduler, opt, base_save_path, is_sty
 
     return all_paths, all_latents
 
-def get_latents(opt, content_path=None, mode="train"):
+def get_latents(opt, content_path=None, mode="train", output_dir=None):
     """
     Get latents for content and style images
     Args:
@@ -103,7 +105,9 @@ def get_latents(opt, content_path=None, mode="train"):
     extraction_path = "latents_reverse" if opt.extract_reverse else "latents_forward"
     
     # Create mode-specific output directories
-    base_save_path = os.path.join(opt.latents_dir, mode, extraction_path)
+    if output_dir is None:
+        output_dir = opt.latents_dir
+    base_save_path = os.path.join(output_dir, mode, extraction_path)
     os.makedirs(base_save_path, exist_ok=True)
 
     # Initialize model
