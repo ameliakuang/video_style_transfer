@@ -119,7 +119,8 @@ def run_policy_gradients(train_content_paths, train_content_latents,
                         num_epochs, lr, temporal_weight, content_weight, style_weight):
     model_key = "Salesforce/blipdiffusion"
     blip_diffusion_pipe = BLIP.from_pretrained(model_key, torch_dtype=torch.float16).to(opt.device)
-    
+    scaler = GradScaler()
+
     scheduler = PNDMScheduler.from_pretrained(model_key, subfolder="scheduler")
     scheduler.set_timesteps(opt.ddpm_steps)
     
@@ -414,3 +415,6 @@ if __name__ == "__main__":
         content_weight=opt.content_weight,
         style_weight=opt.style_weight
     )
+    
+    
+
