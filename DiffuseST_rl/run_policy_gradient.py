@@ -23,6 +23,9 @@ from pnp_utils_style import *
 import torchvision.transforms as T
 from preprocess_style import get_timesteps, Preprocess
 from pnp_style import PNP, BLIP
+from lpips import LPIPS
+from temporal_loss import TemporalConsistencyLossRAFT
+from styleloss import gram_matrix, VGGFeatures
 
 from extract_latents import get_latents
 from policy_network import LatentPolicy
@@ -48,14 +51,15 @@ def load_all_videos_latents(video_folders, opt, mode="train"):
         all_video_latents.append(content_latents)
     return all_video_paths, all_video_latents, style_paths, style_latents
 
-def evaluate_policy(policy, content_latents, style_latents, content_file, style_file, prev_modified_stylized_frame, prev_ori_stylized_frame, pnp, scheduler, device, save_dir=None):
+def evaluate_policy(policy, content_latents, style_latents, content_file, style_file, prev_modified_stylized_frame, prev_ori_stylized_frame, pnp, scheduler, device, save_dir=None, temp_loss_fn=None, loss_fn_alex=None, vgg=None):
     """
     Evaluate the policy on a single content-style pair
     Returns:
         Dictionary containing all evaluation metrics
     """
     style_env = StyleEnv(pnp, scheduler, device, content_latents, style_latents, 
-                        content_file, style_file, content_latents, content_file)
+                        content_file, style_file, content_latents, content_file,
+                        temp_loss_fn, loss_fn_alex, vgg)
     
     with torch.no_grad():
         delta_z, _ = policy.sample(content_latents[-1][None, :, :, :], content_latents[-1][None, :, :, :])
@@ -158,6 +162,22 @@ def run_policy_gradients(train_content_paths_list, train_content_latents_list,
     policy = LatentPolicy().to(opt.device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=opt.lr)
 
+    # Create RAFT, LPIPS, vgg model
+    temp_loss_fn = TemporalConsistencyLossRAFT(
+        small=True,
+        loss_type='l1',
+        occlusion=True,
+        occ_thresh_px=1.0,
+        device=opt.device)
+    
+    loss_fn_alex = LPIPS(net='alex')
+    feature_layers = [1, 6, 11, 20, 29]
+    vgg = VGGFeatures(feature_layers)
+    vgg.eval()
+    for param in vgg.parameters():
+        param.requires_grad = False
+    
+
     # training metrics
     train_metrics = {
         'epoch': [],
@@ -221,7 +241,10 @@ def run_policy_gradients(train_content_paths_list, train_content_latents_list,
                                         prev_content_latents, prev_content_file,
                                         content_weight=content_weight,
                                         temporal_weight=temporal_weight,
-                                        style_weight=style_weight)
+                                        style_weight=style_weight,
+                                        temp_loss_fn=temp_loss_fn,
+                                        loss_fn_alex=loss_fn_alex,
+                                        vgg_model=vgg)
                     
                     with autocast():
                         delta_z, log_prob = policy.sample(prev_content_latents[-1][None, :, :, :], 
@@ -255,6 +278,11 @@ def run_policy_gradients(train_content_paths_list, train_content_latents_list,
                     epoch_modified_stylized_frames.append(modified_stylized_frame)
                     epoch_ori_stylized_frames.append(ori_stylized_frame)
 
+                    del style_env
+                    del delta_z
+                    del log_prob
+                    
+
             # Average and store training metrics - all metrics should be CPU values now
             for key in train_metrics.keys():
                 if key == 'epoch':
@@ -277,7 +305,8 @@ def run_policy_gradients(train_content_paths_list, train_content_latents_list,
                         metrics, modified_stylized_frame, ori_stylized_frame = evaluate_policy(
                             policy, content_latents, style_latents,
                             content_file, style_file, prev_modified_stylized_frame, prev_ori_stylized_frame, pnp, scheduler,
-                            opt.device, train_eval_save_dir
+                            opt.device, train_eval_save_dir,
+                            temp_loss_fn, loss_fn_alex, vgg
                         )
                         
                         for key in metrics.keys():
@@ -311,7 +340,8 @@ def run_policy_gradients(train_content_paths_list, train_content_latents_list,
                             metrics, modified_stylized_frame, ori_stylized_frame = evaluate_policy(
                                 policy, content_latents, style_latents,
                                 content_file, style_file, prev_test_modified_stylized_frame, prev_test_ori_stylized_frame, pnp, scheduler,
-                                opt.device, test_eval_save_dir
+                                opt.device, test_eval_save_dir,
+                                temp_loss_fn, loss_fn_alex, vgg
                             )
                             
                             for key in metrics.keys():

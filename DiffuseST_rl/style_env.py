@@ -20,6 +20,9 @@ class StyleEnv:
                  content_weight=1,
                  temporal_weight=10.0,
                  style_weight=0.1,
+                 temp_loss_fn=None,
+                 loss_fn_alex=None,
+                 vgg_model=None,
                  ):
         self.pnp = pnp
         self.scheduler = scheduler
@@ -46,6 +49,9 @@ class StyleEnv:
         ])
         self.curr_content_frame = self.transform(Image.open(self.curr_content_file))
         
+        self.temp_loss_fn = temp_loss_fn
+        self.loss_fn_alex = loss_fn_alex
+        self.vgg_model = vgg_model
 
     
     def _compute_temporal_loss(self, 
@@ -53,12 +59,6 @@ class StyleEnv:
                                prev_stylized_frame):
         if prev_stylized_frame is None:
             return 0.0
-        temp_loss_fn = TemporalConsistencyLossRAFT(
-            small=True,
-            loss_type='l1',
-            occlusion=True,
-            occ_thresh_px=1.0,
-            device=self.device)
 
         curr_content_img = Image.open(self.curr_content_file)
         prev_content_file = Image.open(self.prev_content_file)
@@ -69,15 +69,15 @@ class StyleEnv:
         S_tp1 = self.transform(stylized_frame).unsqueeze(0).to(self.device) # t+1
 
         with torch.no_grad():
-            temporal_loss = temp_loss_fn(F_t, F_tp1, S_t, S_tp1)
+            temporal_loss = self.temp_loss_fn(F_t, F_tp1, S_t, S_tp1)
             return temporal_loss.detach().cpu().item()  # Convert to float
 
     def _compute_content_loss(self, stylized_frame):
         stylized_frame = self.transform(stylized_frame)
-        loss_fn_alex = LPIPS(net='alex') # best forward scores
+        # loss_fn_alex = LPIPS(net='alex') # best forward scores
         # loss_fn_vgg = lpips.LPIPS(net='vgg') # closer to "traditional" perceptual loss, when used for optimization
 
-        d = loss_fn_alex(stylized_frame.unsqueeze(0), self.curr_content_frame.unsqueeze(0))  # Add batch dimension
+        d = self.loss_fn_alex(stylized_frame.unsqueeze(0), self.curr_content_frame.unsqueeze(0))  # Add batch dimension
         return d.item()  # Convert tensor to Python float
     
     def _compute_style_loss(self, stylized_frame):
@@ -89,16 +89,11 @@ class StyleEnv:
         style_img = Image.open(self.style_file)
         style_tensor = normalize_batch(self.transform(style_img).unsqueeze(0))
         stylized_output_tensor = normalize_batch(self.transform(stylized_frame).unsqueeze(0))
-        feature_layers = [1, 6, 11, 20, 29]
-        vgg = VGGFeatures(feature_layers)
-        vgg.eval()
-        for param in vgg.parameters():
-            param.requires_grad = False
         with torch.no_grad():
-            style_features = vgg(style_tensor)
+            style_features = self.vgg_model(style_tensor)
             style_grams = [gram_matrix(f) for f in style_features]
         g_s = style_grams[0]
-        frame_features = vgg(stylized_output_tensor)
+        frame_features = self.vgg_model(stylized_output_tensor)
         g_f = gram_matrix(frame_features[0])
         loss_fn = nn.MSELoss()
         style_loss = loss_fn(g_f, g_s)
