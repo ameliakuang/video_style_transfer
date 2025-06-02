@@ -6,6 +6,8 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime
+from torch.cuda.amp import autocast, GradScaler
+
 
 # suppress partial model loading warning
 logging.set_verbosity_error()
@@ -188,7 +190,7 @@ def run_policy_gradients(train_content_paths, train_content_latents,
             prev_content_latents = train_content_latents[i-1]
             prev_content_file = train_content_paths[i-1]
 
-            for style_latents, style_file in zip(all_style_latents, style_paths):
+            for j, (style_latents, style_file) in enumerate(zip(all_style_latents, style_paths)):
                 style_env = StyleEnv(pnp, scheduler, opt.device,
                                     curr_content_latents, style_latents,
                                     curr_content_file, style_file,
@@ -197,22 +199,27 @@ def run_policy_gradients(train_content_paths, train_content_latents,
                                     temporal_weight=temporal_weight,
                                     style_weight=style_weight)
                 
-                delta_z, log_prob = policy.sample(prev_content_latents[-1][None, :, :, :], 
-                                                curr_content_latents[-1][None, :, :, :])
-                
-                # obtain reward
-                prev_modified_stylized_frame = None
-                prev_ori_stylized_frame = None
-                if epoch_modified_stylized_frames and epoch_ori_stylized_frames:
-                    prev_modified_stylized_frame = epoch_modified_stylized_frames[-1]
-                    prev_ori_stylized_frame = epoch_ori_stylized_frames[-1]
-                reward, content, style, temporal, loss_modified, content_ori, style_ori, temporal_ori, loss_ori, modified_stylized_frame, ori_stylized_frame = style_env.step(delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame)
-                
-                # update policy
-                policy_loss = -log_prob[-1] * reward
-                optimizer.zero_grad()
-                policy_loss.backward()
-                optimizer.step()
+                with autocast():
+                    delta_z, log_prob = policy.sample(prev_content_latents[-1][None, :, :, :], 
+                                                    curr_content_latents[-1][None, :, :, :])
+                    
+                    # obtain reward
+                    prev_modified_stylized_frame = None
+                    prev_ori_stylized_frame = None
+                    if epoch_modified_stylized_frames and epoch_ori_stylized_frames:
+                        prev_modified_stylized_frame = epoch_modified_stylized_frames[-1]
+                        prev_ori_stylized_frame = epoch_ori_stylized_frames[-1]
+                    reward, content, style, temporal, loss_modified, content_ori, style_ori, temporal_ori, loss_ori, modified_stylized_frame, ori_stylized_frame = style_env.step(delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame)
+                    
+                    # update policy
+                    policy_loss = -log_prob[-1] * reward
+                    policy_loss = policy_loss / opt.accumulation_steps
+                scaler.scale(policy_loss).backward()
+
+                if (i * len(style_paths) + j + 1) % opt.accumulation_steps == 0:
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
 
                 epoch_metrics['policy_loss'].append(policy_loss.detach().cpu().item())
                 epoch_metrics['content_loss'].append(content)
@@ -362,6 +369,8 @@ if __name__ == "__main__":
                         help='Weight for content preservation loss')
     parser.add_argument('--style_weight', type=float, default=10,
                         help='Weight for style preservation loss')
+    parser.add_argument('--accumulation_steps', type=int, default=4,
+                        help='Number of steps to accumulate gradients before updating the policy network')
     
 
     
@@ -405,6 +414,3 @@ if __name__ == "__main__":
         content_weight=opt.content_weight,
         style_weight=opt.style_weight
     )
-    
-    
-
