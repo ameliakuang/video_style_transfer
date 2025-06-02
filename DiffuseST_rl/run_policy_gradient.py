@@ -59,7 +59,7 @@ def evaluate_policy(policy, content_latents, style_latents, content_file, style_
     """
     style_env = StyleEnv(pnp, scheduler, device, content_latents, style_latents, 
                         content_file, style_file, content_latents, content_file,
-                        temp_loss_fn, loss_fn_alex, vgg)
+                        temp_loss_fn=temp_loss_fn, loss_fn_alex=loss_fn_alex, vgg_model=vgg)
     
     with torch.no_grad():
         delta_z, _ = policy.sample(content_latents[-1][None, :, :, :], content_latents[-1][None, :, :, :])
@@ -306,7 +306,7 @@ def run_policy_gradients(train_content_paths_list, train_content_latents_list,
                             policy, content_latents, style_latents,
                             content_file, style_file, prev_modified_stylized_frame, prev_ori_stylized_frame, pnp, scheduler,
                             opt.device, train_eval_save_dir,
-                            temp_loss_fn, loss_fn_alex, vgg
+                            temp_loss_fn=temp_loss_fn, loss_fn_alex=loss_fn_alex, vgg=vgg
                         )
                         
                         for key in metrics.keys():
@@ -341,7 +341,7 @@ def run_policy_gradients(train_content_paths_list, train_content_latents_list,
                                 policy, content_latents, style_latents,
                                 content_file, style_file, prev_test_modified_stylized_frame, prev_test_ori_stylized_frame, pnp, scheduler,
                                 opt.device, test_eval_save_dir,
-                                temp_loss_fn, loss_fn_alex, vgg
+                                temp_loss_fn=temp_loss_fn, loss_fn_alex=loss_fn_alex, vgg=vgg
                             )
                             
                             for key in metrics.keys():
