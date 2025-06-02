@@ -28,6 +28,26 @@ from extract_latents import get_latents
 from policy_network import LatentPolicy
 from style_env import StyleEnv
 
+def get_all_videos_from_folder(folder_path):
+    """Returns sorted list of subfolders containing video frames"""
+    video_folders = [os.path.join(folder_path, d) for d in sorted(os.listdir(folder_path)) if os.path.isdir(os.path.join(folder_path, d))]
+    return video_folders
+
+def load_all_videos_latents(video_folders, opt, mode="train"):
+    """Load latents and frame paths for all videos in a list of folders"""
+    all_video_paths = []
+    all_video_latents = []
+    for vf in video_folders:
+        print(f"Processing video folder: {vf}")
+        video_name = os.path.basename(os.path.normpath(vf))
+        video_output_dir = os.path.join(opt.latents_dir, video_name)
+        content_paths, content_latents, style_paths, style_latents = get_latents(
+            opt, vf, mode=mode, output_dir=video_output_dir
+        )
+        all_video_paths.append(content_paths)
+        all_video_latents.append(content_latents)
+    return all_video_paths, all_video_latents, style_paths, style_latents
+
 def evaluate_policy(policy, content_latents, style_latents, content_file, style_file, prev_modified_stylized_frame, prev_ori_stylized_frame, pnp, scheduler, device, save_dir=None):
     """
     Evaluate the policy on a single content-style pair
@@ -113,8 +133,8 @@ def plot_metrics(train_metrics, train_eval_metrics, test_eval_metrics, save_dir)
     plt.savefig(os.path.join(save_dir, 'all_metrics.png'))
     plt.close()
 
-def run_policy_gradients(train_content_paths, train_content_latents,
-                        test_content_paths, test_content_latents,
+def run_policy_gradients(train_content_paths_list, train_content_latents_list,
+                        test_content_paths_list, test_content_latents_list,
                         style_paths, all_style_latents, latents_dir,output_dir,
                         num_epochs, lr, temporal_weight, content_weight, style_weight):
     model_key = "Salesforce/blipdiffusion"
@@ -184,156 +204,159 @@ def run_policy_gradients(train_content_paths, train_content_latents,
         epoch_modified_stylized_frames = []
         epoch_ori_stylized_frames = []
 
-        # Training
-        for i, (curr_content_latents, curr_content_file) in enumerate(zip(train_content_latents, train_content_paths)):
-            if i == 0:
-                continue
-            prev_content_latents = train_content_latents[i-1]
-            prev_content_file = train_content_paths[i-1]
+        # Training over all videos
+        for video_idx, (train_content_paths, train_content_latents) in enumerate(zip(train_content_paths_list, train_content_latents_list)):
+            for i, curr_content_latents in enumerate(train_content_latents):
+                if i == 0:
+                    continue
+                prev_content_latents = train_content_latents[i-1]
 
-            for j, (style_latents, style_file) in enumerate(zip(all_style_latents, style_paths)):
-                style_env = StyleEnv(pnp, scheduler, opt.device,
-                                    curr_content_latents, style_latents,
-                                    curr_content_file, style_file,
-                                    prev_content_latents, prev_content_file,
-                                    content_weight=content_weight,
-                                    temporal_weight=temporal_weight,
-                                    style_weight=style_weight)
+                curr_content_file = train_content_paths[i]
+                prev_content_file = train_content_paths[i-1]
+
+                for j, (style_latents, style_file) in enumerate(zip(all_style_latents, style_paths)):
+                    style_env = StyleEnv(pnp, scheduler, opt.device,
+                                        curr_content_latents, style_latents,
+                                        curr_content_file, style_file,
+                                        prev_content_latents, prev_content_file,
+                                        content_weight=content_weight,
+                                        temporal_weight=temporal_weight,
+                                        style_weight=style_weight)
+                    
+                    with autocast():
+                        delta_z, log_prob = policy.sample(prev_content_latents[-1][None, :, :, :], 
+                                                        curr_content_latents[-1][None, :, :, :])
+                        
+                        # obtain reward
+                        prev_modified_stylized_frame = None
+                        prev_ori_stylized_frame = None
+                        if epoch_modified_stylized_frames and epoch_ori_stylized_frames:
+                            prev_modified_stylized_frame = epoch_modified_stylized_frames[-1]
+                            prev_ori_stylized_frame = epoch_ori_stylized_frames[-1]
+                        reward, content, style, temporal, loss_modified, content_ori, style_ori, temporal_ori, loss_ori, modified_stylized_frame, ori_stylized_frame = style_env.step(delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame)
+                        
+                        # update policy
+                        policy_loss = -log_prob[-1] * reward
+                        policy_loss = policy_loss / opt.accumulation_steps
+                    scaler.scale(policy_loss).backward()
+
+                    if (i * len(style_paths) + j + 1) % opt.accumulation_steps == 0:
+                        scaler.step(optimizer)
+                        scaler.update()
+                        optimizer.zero_grad()
+
+                    epoch_metrics['policy_loss'].append(policy_loss.detach().cpu().item())
+                    epoch_metrics['content_loss'].append(content)
+                    epoch_metrics['style_loss'].append(style)
+                    epoch_metrics['temporal_loss'].append(temporal)
+                    epoch_metrics['total_loss'].append(loss_modified)
+                    epoch_metrics['reward'].append(reward)
+
+                    epoch_modified_stylized_frames.append(modified_stylized_frame)
+                    epoch_ori_stylized_frames.append(ori_stylized_frame)
+
+            # Average and store training metrics - all metrics should be CPU values now
+            for key in train_metrics.keys():
+                if key == 'epoch':
+                    train_metrics[key].append(e)
+                else:
+                    train_metrics[key].append(np.mean(epoch_metrics[key]))
+
+            # Evaluation
+            if (e + 1) % eval_interval == 0 or e == num_epochs - 1:
+                print(f"\nRunning evaluation at epoch {e + 1}")
                 
-                with autocast():
-                    delta_z, log_prob = policy.sample(prev_content_latents[-1][None, :, :, :], 
-                                                    curr_content_latents[-1][None, :, :, :])
-                    
-                    # obtain reward
-                    prev_modified_stylized_frame = None
-                    prev_ori_stylized_frame = None
-                    if epoch_modified_stylized_frames and epoch_ori_stylized_frames:
-                        prev_modified_stylized_frame = epoch_modified_stylized_frames[-1]
-                        prev_ori_stylized_frame = epoch_ori_stylized_frames[-1]
-                    reward, content, style, temporal, loss_modified, content_ori, style_ori, temporal_ori, loss_ori, modified_stylized_frame, ori_stylized_frame = style_env.step(delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame)
-                    
-                    # update policy
-                    policy_loss = -log_prob[-1] * reward
-                    policy_loss = policy_loss / opt.accumulation_steps
-                scaler.scale(policy_loss).backward()
+                # Evaluate on training set
+                train_eval_save_dir = os.path.join(train_eval_path, f'epoch_{e+1}')
+                os.makedirs(train_eval_save_dir, exist_ok=True)
+                
+                epoch_train_eval_metrics = {key: [] for key in train_eval_metrics.keys()}
+                
+                for i, (content_latents, content_file) in enumerate(zip(train_content_latents, train_content_paths)):
+                    for style_latents, style_file in zip(all_style_latents, style_paths):
+                        metrics, modified_stylized_frame, ori_stylized_frame = evaluate_policy(
+                            policy, content_latents, style_latents,
+                            content_file, style_file, prev_modified_stylized_frame, prev_ori_stylized_frame, pnp, scheduler,
+                            opt.device, train_eval_save_dir
+                        )
+                        
+                        for key in metrics.keys():
+                            epoch_train_eval_metrics[key].append(metrics[key])
+                        
+                        epoch_train_eval_metrics['epoch'].append(e)
+                
+                # Store training evaluation metrics
+                for key in train_eval_metrics.keys():
+                    train_eval_metrics[key].append(np.mean(epoch_train_eval_metrics[key]))
+                
+                # Evaluate on test set
+                test_eval_save_dir = os.path.join(test_eval_path, f'epoch_{e+1}')
+                os.makedirs(test_eval_save_dir, exist_ok=True)
+                
+                epoch_test_eval_metrics = {key: [] for key in test_eval_metrics.keys()}
 
-                if (i * len(style_paths) + j + 1) % opt.accumulation_steps == 0:
-                    scaler.step(optimizer)
-                    scaler.update()
-                    optimizer.zero_grad()
+                epoch_test_modified_stylized_frames = []
+                epoch_test_ori_stylized_frames = []
 
-                epoch_metrics['policy_loss'].append(policy_loss.detach().cpu().item())
-                epoch_metrics['content_loss'].append(content)
-                epoch_metrics['style_loss'].append(style)
-                epoch_metrics['temporal_loss'].append(temporal)
-                epoch_metrics['total_loss'].append(loss_modified)
-                epoch_metrics['reward'].append(reward)
+                for video_idx, (test_content_paths, test_content_latents) in enumerate(zip(test_content_paths_list, test_content_latents_list)):
+                    for i, (content_latents, content_file) in enumerate(zip(test_content_latents, test_content_paths)):
+                        for style_latents, style_file in zip(all_style_latents, style_paths):
+                            if i == 0:
+                                prev_test_modified_stylized_frame = None
+                                prev_test_ori_stylized_frame = None
+                            else:
+                                prev_test_modified_stylized_frame = epoch_test_modified_stylized_frames[-1]
+                                prev_test_ori_stylized_frame = epoch_test_ori_stylized_frames[-1]
+                            
+                            metrics, modified_stylized_frame, ori_stylized_frame = evaluate_policy(
+                                policy, content_latents, style_latents,
+                                content_file, style_file, prev_test_modified_stylized_frame, prev_test_ori_stylized_frame, pnp, scheduler,
+                                opt.device, test_eval_save_dir
+                            )
+                            
+                            for key in metrics.keys():
+                                epoch_test_eval_metrics[key].append(metrics[key])
+                            
+                            epoch_test_eval_metrics['epoch'].append(e)
 
-                epoch_modified_stylized_frames.append(modified_stylized_frame)
-                epoch_ori_stylized_frames.append(ori_stylized_frame)
+                            epoch_test_modified_stylized_frames.append(modified_stylized_frame)
+                            epoch_test_ori_stylized_frames.append(ori_stylized_frame)
+                
+                # baseline_sims = compute_clip_similarities(epoch_test_modified_stylized_frames)
+                # rl_sims = compute_clip_similarities(epoch_test_ori_stylized_frames)
 
-        # Average and store training metrics - all metrics should be CPU values now
-        for key in train_metrics.keys():
-            if key == 'epoch':
-                train_metrics[key].append(e)
-            else:
-                train_metrics[key].append(np.mean(epoch_metrics[key]))
-
-        # Evaluation
-        if (e + 1) % eval_interval == 0 or e == num_epochs - 1:
-            print(f"\nRunning evaluation at epoch {e + 1}")
-            
-            # Evaluate on training set
-            train_eval_save_dir = os.path.join(train_eval_path, f'epoch_{e+1}')
-            os.makedirs(train_eval_save_dir, exist_ok=True)
-            
-            epoch_train_eval_metrics = {key: [] for key in train_eval_metrics.keys()}
-            
-            for i, (content_latents, content_file) in enumerate(zip(train_content_latents, train_content_paths)):
-                for style_latents, style_file in zip(all_style_latents, style_paths):
-                    metrics, modified_stylized_frame, ori_stylized_frame = evaluate_policy(
-                        policy, content_latents, style_latents,
-                        content_file, style_file, prev_modified_stylized_frame, prev_ori_stylized_frame, pnp, scheduler,
-                        opt.device, train_eval_save_dir
-                    )
-                    
-                    for key in metrics.keys():
-                        epoch_train_eval_metrics[key].append(metrics[key])
-                    
-                    epoch_train_eval_metrics['epoch'].append(e)
-            
-            # Store training evaluation metrics
-            for key in train_eval_metrics.keys():
-                train_eval_metrics[key].append(np.mean(epoch_train_eval_metrics[key]))
-            
-            # Evaluate on test set
-            test_eval_save_dir = os.path.join(test_eval_path, f'epoch_{e+1}')
-            os.makedirs(test_eval_save_dir, exist_ok=True)
-            
-            epoch_test_eval_metrics = {key: [] for key in test_eval_metrics.keys()}
-
-            epoch_test_modified_stylized_frames = []
-            epoch_test_ori_stylized_frames = []
-            
-            for i, (content_latents, content_file) in enumerate(zip(test_content_latents, test_content_paths)):
-                for style_latents, style_file in zip(all_style_latents, style_paths):
-                    
-                    if i == 0:
-                        prev_test_modified_stylized_frame = None
-                        prev_test_ori_stylized_frame = None
-                    else:
-                        prev_test_modified_stylized_frame = epoch_test_modified_stylized_frames[-1]
-                        prev_test_ori_stylized_frame = epoch_test_ori_stylized_frames[-1]
-                    
-                    metrics, modified_stylized_frame, ori_stylized_frame = evaluate_policy(
-                        policy, content_latents, style_latents,
-                        content_file, style_file, prev_test_modified_stylized_frame, prev_test_ori_stylized_frame, pnp, scheduler,
-                        opt.device, test_eval_save_dir
-                    )
-                    
-                    for key in metrics.keys():
-                        epoch_test_eval_metrics[key].append(metrics[key])
-                    
-                    epoch_test_eval_metrics['epoch'].append(e)
-
-                    epoch_test_modified_stylized_frames.append(modified_stylized_frame)
-                    epoch_test_ori_stylized_frames.append(ori_stylized_frame)
-            
-            # baseline_sims = compute_clip_similarities(epoch_test_modified_stylized_frames)
-            # rl_sims = compute_clip_similarities(epoch_test_ori_stylized_frames)
-
-            # Store test evaluation metrics
-            for key in test_eval_metrics.keys():
-                test_eval_metrics[key].append(np.mean(epoch_test_eval_metrics[key]))
-            
-            # Print evaluation results
-            print("\nTraining Set Evaluation:")
-            for k, v in train_eval_metrics.items():
-                print(f"{k}: {v[-1]:.4f}")
-            
-            print("\nTest Set Evaluation:")
-            for k, v in test_eval_metrics.items():
-                print(f"{k}: {v[-1]:.4f}")
-            
-            # Save best model based on test set reward
-            if test_eval_metrics['reward'][-1] > best_reward:
-                best_reward = test_eval_metrics['reward'][-1]
+                # Store test evaluation metrics
+                for key in test_eval_metrics.keys():
+                    test_eval_metrics[key].append(np.mean(epoch_test_eval_metrics[key]))
+                
+                # Print evaluation results
+                print("\nTraining Set Evaluation:")
+                for k, v in train_eval_metrics.items():
+                    print(f"{k}: {v[-1]:.4f}")
+                
+                print("\nTest Set Evaluation:")
+                for k, v in test_eval_metrics.items():
+                    print(f"{k}: {v[-1]:.4f}")
+                
+                # Save best model based on test set reward
+                if test_eval_metrics['reward'][-1] > best_reward:
+                    best_reward = test_eval_metrics['reward'][-1]
+                    torch.save({
+                        'epoch': e + 1,
+                        'model_state_dict': policy.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'train_metrics': train_metrics,
+                        'test_metrics': test_eval_metrics,
+                    }, os.path.join(model_save_path, 'best_policy_model.pth'))
+                
+                # Save latest model
                 torch.save({
                     'epoch': e + 1,
                     'model_state_dict': policy.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'train_metrics': train_metrics,
                     'test_metrics': test_eval_metrics,
-                }, os.path.join(model_save_path, 'best_policy_model.pth'))
-            
-            # Save latest model
-            torch.save({
-                'epoch': e + 1,
-                'model_state_dict': policy.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'train_metrics': train_metrics,
-                'test_metrics': test_eval_metrics,
-            }, os.path.join(model_save_path, 'latest_policy_model.pth'))
+                }, os.path.join(model_save_path, 'latest_policy_model.pth'))
 
     # Plot and save metrics
     plot_metrics(train_metrics, train_eval_metrics, test_eval_metrics, metrics_save_path)
@@ -399,22 +422,33 @@ if __name__ == "__main__":
 
 
     # Get train and test data
-    train_content_paths, train_content_latents, style_paths, style_latents = get_latents(opt, opt.train_content_path, mode="train")
-    test_content_paths, test_content_latents, _, _ = get_latents(opt, opt.test_content_path, mode="test")
+    train_video_folders = get_all_videos_from_folder(opt.train_content_path)
+    test_video_folders = get_all_videos_from_folder(opt.test_content_path)
 
-    # Run training
-    trained_policy = run_policy_gradients(
-        train_content_paths, train_content_latents,
-        test_content_paths, test_content_latents,
-        style_paths, style_latents,
-        latents_dir=opt.latents_dir,
-        output_dir=opt.output_dir,
-        num_epochs=opt.num_epochs,
-        lr=opt.lr,
-        temporal_weight=opt.temporal_weight,
-        content_weight=opt.content_weight,
-        style_weight=opt.style_weight
-    )
+    # Load latents and frame paths for all videos in train and test folders
+    train_content_paths_list, train_content_latents_list, style_paths, all_style_latents = load_all_videos_latents(train_video_folders, opt, mode="train")
+    test_content_paths_list, test_content_latents_list, _, _ = load_all_videos_latents(test_video_folders, opt, mode="test")
+
+    trained_policy = run_policy_gradients(train_content_paths_list, train_content_latents_list,
+                        test_content_paths_list, test_content_latents_list,
+                        style_paths, all_style_latents,
+                        opt.latents_dir, opt.output_dir,
+                        opt.num_epochs, opt.lr,
+                        opt.temporal_weight, opt.content_weight, opt.style_weight)
+
+    # # Run training
+    # trained_policy = run_policy_gradients(
+    #     train_content_paths, train_content_latents,
+    #     test_content_paths, test_content_latents,
+    #     style_paths, style_latents,
+    #     latents_dir=opt.latents_dir,
+    #     output_dir=opt.output_dir,
+    #     num_epochs=opt.num_epochs,
+    #     lr=opt.lr,
+    #     temporal_weight=opt.temporal_weight,
+    #     content_weight=opt.content_weight,
+    #     style_weight=opt.style_weight
+    # )
     
     
 
