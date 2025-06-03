@@ -28,9 +28,10 @@ def load_img1(self, image_path):
 
 
 class PNP(nn.Module):
-    def __init__(self, pipe, config):
+    def __init__(self, pipe, config, paths=None):
         super().__init__()
         self.config = config
+        self.paths = paths
         self.device = config.device
         self.pipe = pipe
         self.pipe.scheduler.set_timesteps(config.ddim_steps, device=self.device)
@@ -46,7 +47,7 @@ class PNP(nn.Module):
         return self.qk_injection_timesteps
     
 
-    def run_pnp(self, content_latents, style_latents, style_file, video_num, content_fn="content", style_fn="style"):
+    def run_pnp(self, content_latents, style_latents, style_file, video_num, mode="train", content_fn="content", style_fn="style"):
         torch.cuda.empty_cache()  # Clear cache before running
         
         with torch.cuda.amp.autocast():  # Enable automatic mixed precision
@@ -62,7 +63,10 @@ class PNP(nn.Module):
             num_inference_steps = 50
             negative_prompt = "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
             
-            init_latents = content_latents[-1].unsqueeze(0).to(self.device, dtype=torch.float16)  # Use float16
+            # Ensure latents are float16
+            init_latents = content_latents[-1].unsqueeze(0).to(self.device, dtype=torch.float16)
+            content_latents = content_latents.to(self.device, dtype=torch.float16)
+            style_latents = style_latents.to(self.device, dtype=torch.float16)
 
             output = self.pipe(
                 content_latents,
@@ -78,21 +82,37 @@ class PNP(nn.Module):
                 height=512,
                 width=512,
                 content_step=content_step,
-            ).images
+            )
+
+            # Ensure proper normalization of output images
+            if isinstance(output.images[0], torch.Tensor):
+                # Convert to float32 for normalization
+                img = output.images[0].float()
+                # Normalize to [0, 1]
+                img = (img - img.min()) / (img.max() - img.min())
+                # Convert to PIL
+                output.images[0] = transforms.ToPILImage()(img.squeeze(0))
 
             # Create full output path
-            output_dir = os.path.join(self.config.output_dir, str(video_num))
+            if mode == "train" and self.paths is not None:
+                output_dir = os.path.join(self.paths['train_path'], f'pnp_output/{str(video_num)}')
+            elif mode == "train_eval" and self.paths is not None:
+                output_dir = os.path.join(self.paths['train_eval_path'], f'pnp_output/{str(video_num)}')
+            elif mode == "test_eval" and self.paths is not None:
+                output_dir = os.path.join(self.paths['test_eval_path'], f'pnp_output/{str(video_num)}')
+            else:
+                output_dir = self.config.output_dir + f'pnp_output/{mode}/'
             os.makedirs(output_dir, exist_ok=True)
             
             # Create filename
             output_filename = f'{os.path.splitext(os.path.basename(content_fn))[0]}_{os.path.splitext(os.path.basename(style_fn))[0]}.png'
             output_path = os.path.join(output_dir, output_filename)
             
-            # Save the image
-            output[0].save(output_path)
+            # Save the image with proper normalization
+            output.images[0].save(output_path)
             
             torch.cuda.empty_cache()  # Clear cache after running
-            return output
+            return output.images
         
 
 def seed_everything(seed):

@@ -23,6 +23,7 @@ class StyleEnv:
                  temp_loss_fn=None,
                  loss_fn_alex=None,
                  vgg_model=None,
+                 mode="train",
                  ):
         self.pnp = pnp
         self.scheduler = scheduler
@@ -52,6 +53,8 @@ class StyleEnv:
         self.temp_loss_fn = temp_loss_fn
         self.loss_fn_alex = loss_fn_alex
         self.vgg_model = vgg_model
+
+        self.mode = mode
 
     
     def _compute_temporal_loss(self, 
@@ -113,25 +116,38 @@ class StyleEnv:
         Apply delta_z to the content latents to obtain modified latents
         Run PNP to obtain modified frame and original stylized frame
         Compute reward as difference between loss of modified frame and loss of original stylized frame
-        TODO: consider adding a weight for delta_z to control the strength of the modified noise
         """
+        # Convert delta_z to float16 for consistency with PNP pipeline
+        delta_z = delta_z.to(dtype=torch.float16)
+        
         # Add delta_z to the latent at t = T
-        modified_latent = self.curr_content_latents[-1, :, :, :] + delta_z
-        content_latents = self.curr_content_latents.clone()
+        modified_latent = self.curr_content_latents[-1, :, :, :].to(dtype=torch.float16) + delta_z
+        content_latents = self.curr_content_latents.clone().to(dtype=torch.float16)
         content_latents[-1, :, :, :] = modified_latent
         modified_stylized_frame = self.pnp.run_pnp(content_latents, 
-                                        self.style_latents, 
+                                        self.style_latents.to(dtype=torch.float16), 
                                         self.style_file, 
                                         video_num,
+                                        mode=self.mode,
                                         content_fn=self.output_modified_fn, 
                                         style_fn=self.style_file)[0]
         
-        ori_stylized_frame = self.pnp.run_pnp(self.curr_content_latents, 
-                                        self.style_latents,
+        # Run PNP for original frame
+        ori_stylized_frame = self.pnp.run_pnp(self.curr_content_latents.to(dtype=torch.float16), 
+                                        self.style_latents.to(dtype=torch.float16),
                                         self.style_file,
                                         video_num,
                                         content_fn=self.output_ori_fn,
                                         style_fn=self.style_file)[0]
+
+        # Ensure images are properly normalized PIL Images
+        if isinstance(modified_stylized_frame, torch.Tensor):
+            modified_stylized_frame = modified_stylized_frame.float().clamp(0, 1)
+            modified_stylized_frame = transforms.ToPILImage()(modified_stylized_frame)
+        
+        if isinstance(ori_stylized_frame, torch.Tensor):
+            ori_stylized_frame = ori_stylized_frame.float().clamp(0, 1)
+            ori_stylized_frame = transforms.ToPILImage()(ori_stylized_frame)
 
         # compute reward
         content, style, temporal, loss_modified = self._compute_losses(modified_stylized_frame, prev_modified_stylized_frame)
