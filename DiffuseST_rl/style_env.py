@@ -17,9 +17,9 @@ class StyleEnv:
                  style_file,
                  prev_content_latents,
                  prev_content_file,
-                 content_weight=1,
+                 content_weight=1.0,
                  temporal_weight=10.0,
-                 style_weight=0.1,
+                 style_weight=10.0,
                  temp_loss_fn=None,
                  loss_fn_alex=None,
                  vgg_model=None,
@@ -108,7 +108,7 @@ class StyleEnv:
         print(f"weighted content_loss: {self.content_weight * content_loss}, style_loss: {self.style_weight * style_loss}, temporal_loss: {self.temporal_weight * temporal_loss}\n")
         return content_loss, style_loss, temporal_loss, total_loss
 
-    def step(self, delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame):
+    def step(self, delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame, video_num):
         """
         Apply delta_z to the content latents to obtain modified latents
         Run PNP to obtain modified frame and original stylized frame
@@ -122,12 +122,14 @@ class StyleEnv:
         modified_stylized_frame = self.pnp.run_pnp(content_latents, 
                                         self.style_latents, 
                                         self.style_file, 
+                                        video_num,
                                         content_fn=self.output_modified_fn, 
                                         style_fn=self.style_file)[0]
         
         ori_stylized_frame = self.pnp.run_pnp(self.curr_content_latents, 
                                         self.style_latents,
                                         self.style_file,
+                                        video_num,
                                         content_fn=self.output_ori_fn,
                                         style_fn=self.style_file)[0]
 

@@ -43,7 +43,7 @@ def load_all_videos_latents(video_folders, opt, mode="train"):
     for vf in video_folders:
         print(f"Processing video folder: {vf}")
         video_name = os.path.basename(os.path.normpath(vf))
-        video_output_dir = os.path.join(opt.latents_dir, video_name)
+        video_output_dir = os.path.join(opt.latents_dir, mode, video_name)
         content_paths, content_latents, style_paths, style_latents = get_latents(
             opt, vf, mode=mode, output_dir=video_output_dir
         )
@@ -51,7 +51,7 @@ def load_all_videos_latents(video_folders, opt, mode="train"):
         all_video_latents.append(content_latents)
     return all_video_paths, all_video_latents, style_paths, style_latents
 
-def evaluate_policy(policy, content_latents, style_latents, content_file, style_file, prev_modified_stylized_frame, prev_ori_stylized_frame, pnp, scheduler, device, save_dir=None, temp_loss_fn=None, loss_fn_alex=None, vgg=None):
+def evaluate_policy(policy, content_latents, style_latents, content_file, style_file, prev_modified_stylized_frame, prev_ori_stylized_frame, pnp, scheduler, device, video_num, save_dir=None, temp_loss_fn=None, loss_fn_alex=None, vgg=None):
     """
     Evaluate the policy on a single content-style pair
     Returns:
@@ -59,14 +59,28 @@ def evaluate_policy(policy, content_latents, style_latents, content_file, style_
     """
     style_env = StyleEnv(pnp, scheduler, device, content_latents, style_latents, 
                         content_file, style_file, content_latents, content_file,
+                        content_weight=content_weight, temporal_weight=temporal_weight, style_weight=style_weight,
                         temp_loss_fn=temp_loss_fn, loss_fn_alex=loss_fn_alex, vgg_model=vgg)
+    
+    style_env = StyleEnv(pnp, scheduler, opt.device,
+                                        curr_content_latents, style_latents,
+                                        curr_content_file, style_file,
+                                        prev_content_latents, prev_content_file,
+                                        content_weight=content_weight,
+                                        temporal_weight=temporal_weight,
+                                        style_weight=style_weight,
+                                        temp_loss_fn=temp_loss_fn,
+                                        loss_fn_alex=loss_fn_alex,
+                                        vgg_model=vgg)
     
     with torch.no_grad():
         delta_z, _ = policy.sample(content_latents[-1][None, :, :, :], content_latents[-1][None, :, :, :])
-        reward, content_loss, style_loss, temporal_loss, loss_modified, _, _, _, _, stylized_frame, ori_stylized_frame = style_env.step(delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame)
+        reward, content_loss, style_loss, temporal_loss, loss_modified, _, _, _, _, stylized_frame, ori_stylized_frame = style_env.step(delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame, video_num)
     
     if save_dir:
-        save_path = os.path.join(save_dir, f'eval_frame_{os.path.basename(content_file)}_{os.path.basename(style_file)}')
+        video_save_dir = os.path.join(save_dir, f'{video_num}')
+        os.makedirs(video_save_dir, exist_ok=True)
+        save_path = os.path.join(video_save_dir, f'eval_frame_{os.path.splitext(os.path.basename(content_file))[0]}_{os.path.splitext(os.path.basename(style_file))[0]}.png')
         stylized_frame.save(save_path)
     
     # Calculate additional evaluation metrics
@@ -256,7 +270,7 @@ def run_policy_gradients(train_content_paths_list, train_content_latents_list,
                         if epoch_modified_stylized_frames and epoch_ori_stylized_frames:
                             prev_modified_stylized_frame = epoch_modified_stylized_frames[-1]
                             prev_ori_stylized_frame = epoch_ori_stylized_frames[-1]
-                        reward, content, style, temporal, loss_modified, content_ori, style_ori, temporal_ori, loss_ori, modified_stylized_frame, ori_stylized_frame = style_env.step(delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame)
+                        reward, content, style, temporal, loss_modified, content_ori, style_ori, temporal_ori, loss_ori, modified_stylized_frame, ori_stylized_frame = style_env.step(delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame, video_idx)
                         
                         # update policy
                         policy_loss = -log_prob[-1] * reward
@@ -268,12 +282,12 @@ def run_policy_gradients(train_content_paths_list, train_content_latents_list,
                         scaler.update()
                         optimizer.zero_grad()
 
-                    epoch_metrics['policy_loss'].append(policy_loss.detach().cpu().item())
-                    epoch_metrics['content_loss'].append(content)
-                    epoch_metrics['style_loss'].append(style)
-                    epoch_metrics['temporal_loss'].append(temporal)
-                    epoch_metrics['total_loss'].append(loss_modified)
-                    epoch_metrics['reward'].append(reward)
+                        epoch_metrics['policy_loss'].append(policy_loss.detach().cpu().item())
+                        epoch_metrics['content_loss'].append(content)
+                        epoch_metrics['style_loss'].append(style)
+                        epoch_metrics['temporal_loss'].append(temporal)
+                        epoch_metrics['total_loss'].append(loss_modified)
+                        epoch_metrics['reward'].append(reward)
 
                     epoch_modified_stylized_frames.append(modified_stylized_frame)
                     epoch_ori_stylized_frames.append(ori_stylized_frame)
@@ -290,113 +304,113 @@ def run_policy_gradients(train_content_paths_list, train_content_latents_list,
                 else:
                     train_metrics[key].append(np.mean(epoch_metrics[key]))
 
-            # Evaluation
-            if (e + 1) % eval_interval == 0 or e == num_epochs - 1:
-                print(f"\nRunning evaluation at epoch {e + 1}")
-                
-                # Evaluate on training set
-                train_eval_save_dir = os.path.join(train_eval_path, f'epoch_{e+1}')
-                os.makedirs(train_eval_save_dir, exist_ok=True)
-                
-                epoch_train_eval_metrics = {key: [] for key in train_eval_metrics.keys()}
-                
-                for i, (content_latents, content_file) in enumerate(zip(train_content_latents, train_content_paths)):
+        # Evaluation
+        if (e + 1) % eval_interval == 0 or e == num_epochs - 1:
+            print(f"\nRunning evaluation at epoch {e + 1}")
+            
+            # Evaluate on training set
+            train_eval_save_dir = os.path.join(train_eval_path, f'epoch_{e+1}')
+            os.makedirs(train_eval_save_dir, exist_ok=True)
+            
+            epoch_train_eval_metrics = {key: [] for key in train_eval_metrics.keys()}
+            
+            for video_idx, (content_latents, content_file) in enumerate(zip(train_content_latents, train_content_paths)):
+                for style_latents, style_file in zip(all_style_latents, style_paths):
+                    metrics, modified_stylized_frame, ori_stylized_frame = evaluate_policy(
+                        policy, content_latents, style_latents,
+                        content_file, style_file, prev_modified_stylized_frame, prev_ori_stylized_frame, pnp, scheduler,
+                        opt.device, video_idx, train_eval_save_dir,
+                        temp_loss_fn=temp_loss_fn, loss_fn_alex=loss_fn_alex, vgg=vgg
+                    )
+                    
+                    for key in metrics.keys():
+                        epoch_train_eval_metrics[key].append(metrics[key])
+                    
+                    epoch_train_eval_metrics['epoch'].append(e)
+            
+            # Store training evaluation metrics
+            for key in train_eval_metrics.keys():
+                train_eval_metrics[key].append(np.mean(epoch_train_eval_metrics[key]))
+            
+            # Evaluate on test set
+            test_eval_save_dir = os.path.join(test_eval_path, f'epoch_{e+1}')
+            os.makedirs(test_eval_save_dir, exist_ok=True)
+            
+            epoch_test_eval_metrics = {key: [] for key in test_eval_metrics.keys()}
+
+            epoch_test_modified_stylized_frames = []
+            epoch_test_ori_stylized_frames = []
+
+            for video_idx, (test_content_paths, test_content_latents) in enumerate(zip(test_content_paths_list, test_content_latents_list)):
+                for i, (content_latents, content_file) in enumerate(zip(test_content_latents, test_content_paths)):
                     for style_latents, style_file in zip(all_style_latents, style_paths):
+                        if i == 0:
+                            prev_test_modified_stylized_frame = None
+                            prev_test_ori_stylized_frame = None
+                        else:
+                            prev_test_modified_stylized_frame = epoch_test_modified_stylized_frames[-1]
+                            prev_test_ori_stylized_frame = epoch_test_ori_stylized_frames[-1]
+                        
                         metrics, modified_stylized_frame, ori_stylized_frame = evaluate_policy(
                             policy, content_latents, style_latents,
-                            content_file, style_file, prev_modified_stylized_frame, prev_ori_stylized_frame, pnp, scheduler,
-                            opt.device, train_eval_save_dir,
+                            content_file, style_file, prev_test_modified_stylized_frame, prev_test_ori_stylized_frame, pnp, scheduler,
+                            opt.device, video_idx, test_eval_save_dir,
                             temp_loss_fn=temp_loss_fn, loss_fn_alex=loss_fn_alex, vgg=vgg
                         )
                         
                         for key in metrics.keys():
-                            epoch_train_eval_metrics[key].append(metrics[key])
+                            epoch_test_eval_metrics[key].append(metrics[key])
                         
-                        epoch_train_eval_metrics['epoch'].append(e)
-                
-                # Store training evaluation metrics
-                for key in train_eval_metrics.keys():
-                    train_eval_metrics[key].append(np.mean(epoch_train_eval_metrics[key]))
-                
-                # Evaluate on test set
-                test_eval_save_dir = os.path.join(test_eval_path, f'epoch_{e+1}')
-                os.makedirs(test_eval_save_dir, exist_ok=True)
-                
-                epoch_test_eval_metrics = {key: [] for key in test_eval_metrics.keys()}
+                        epoch_test_eval_metrics['epoch'].append(e)
 
-                epoch_test_modified_stylized_frames = []
-                epoch_test_ori_stylized_frames = []
+                        epoch_test_modified_stylized_frames.append(modified_stylized_frame)
+                        epoch_test_ori_stylized_frames.append(ori_stylized_frame)
+            
+            # baseline_sims = compute_clip_similarities(epoch_test_modified_stylized_frames)
+            # rl_sims = compute_clip_similarities(epoch_test_ori_stylized_frames)
 
-                for video_idx, (test_content_paths, test_content_latents) in enumerate(zip(test_content_paths_list, test_content_latents_list)):
-                    for i, (content_latents, content_file) in enumerate(zip(test_content_latents, test_content_paths)):
-                        for style_latents, style_file in zip(all_style_latents, style_paths):
-                            if i == 0:
-                                prev_test_modified_stylized_frame = None
-                                prev_test_ori_stylized_frame = None
-                            else:
-                                prev_test_modified_stylized_frame = epoch_test_modified_stylized_frames[-1]
-                                prev_test_ori_stylized_frame = epoch_test_ori_stylized_frames[-1]
-                            
-                            metrics, modified_stylized_frame, ori_stylized_frame = evaluate_policy(
-                                policy, content_latents, style_latents,
-                                content_file, style_file, prev_test_modified_stylized_frame, prev_test_ori_stylized_frame, pnp, scheduler,
-                                opt.device, test_eval_save_dir,
-                                temp_loss_fn=temp_loss_fn, loss_fn_alex=loss_fn_alex, vgg=vgg
-                            )
-                            
-                            for key in metrics.keys():
-                                epoch_test_eval_metrics[key].append(metrics[key])
-                            
-                            epoch_test_eval_metrics['epoch'].append(e)
-
-                            epoch_test_modified_stylized_frames.append(modified_stylized_frame)
-                            epoch_test_ori_stylized_frames.append(ori_stylized_frame)
-                
-                # baseline_sims = compute_clip_similarities(epoch_test_modified_stylized_frames)
-                # rl_sims = compute_clip_similarities(epoch_test_ori_stylized_frames)
-
-                # Store test evaluation metrics
-                for key in test_eval_metrics.keys():
-                    test_eval_metrics[key].append(np.mean(epoch_test_eval_metrics[key]))
-                
-                # Print evaluation results
-                print("\nTraining Set Evaluation:")
-                for k, v in train_eval_metrics.items():
-                    print(f"{k}: {v[-1]:.4f}")
-                
-                print("\nTest Set Evaluation:")
-                for k, v in test_eval_metrics.items():
-                    print(f"{k}: {v[-1]:.4f}")
-                
-                # Save best model based on test set reward
-                if test_eval_metrics['reward'][-1] > best_reward:
-                    best_reward = test_eval_metrics['reward'][-1]
-                    torch.save({
-                        'epoch': e + 1,
-                        'model_state_dict': policy.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'train_metrics': train_metrics,
-                        'test_metrics': test_eval_metrics,
-                    }, os.path.join(model_save_path, 'best_policy_model.pth'))
-                
-                # Save latest model
+            # Store test evaluation metrics
+            for key in test_eval_metrics.keys():
+                test_eval_metrics[key].append(np.mean(epoch_test_eval_metrics[key]))
+            
+            # Print evaluation results
+            print("\nTraining Set Evaluation:")
+            for k, v in train_eval_metrics.items():
+                print(f"{k}: {v[-1]:.4f}")
+            
+            print("\nTest Set Evaluation:")
+            for k, v in test_eval_metrics.items():
+                print(f"{k}: {v[-1]:.4f}")
+            
+            # Save best model based on test set reward
+            if test_eval_metrics['reward'][-1] > best_reward:
+                best_reward = test_eval_metrics['reward'][-1]
                 torch.save({
                     'epoch': e + 1,
                     'model_state_dict': policy.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'train_metrics': train_metrics,
                     'test_metrics': test_eval_metrics,
-                }, os.path.join(model_save_path, 'latest_policy_model.pth'))
+                }, os.path.join(model_save_path, 'best_policy_model.pth'))
+            
+            # Save latest model
+            torch.save({
+                'epoch': e + 1,
+                'model_state_dict': policy.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'train_metrics': train_metrics,
+                'test_metrics': test_eval_metrics,
+            }, os.path.join(model_save_path, 'latest_policy_model.pth'))
 
-    # Plot and save metrics
+    # Plot metrics
     plot_metrics(train_metrics, train_eval_metrics, test_eval_metrics, metrics_save_path)
-
+    
     return policy
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--train_content_path', type=str, default='images_mini/frames_1171471')
-    parser.add_argument('--test_content_path', type=str, default='images_mini/frames_855867')
+    parser.add_argument('--train_content_path', type=str, default='../data2/train_5')
+    parser.add_argument('--test_content_path', type=str, default='../data2/test_2')
     parser.add_argument('--style_path', type=str, default='images/style')
     parser.add_argument('--output_dir', type=str, default='output/')
     parser.add_argument('--latents_dir', type=str, default='latents/', help='Directory to store/load latents')

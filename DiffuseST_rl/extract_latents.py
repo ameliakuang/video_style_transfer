@@ -34,6 +34,7 @@ def extract_latents_for_path(model, path, scheduler, opt, base_save_path, is_sty
         tuple: (file_paths, latents)
     """
     all_paths = [f for f in Path(path).glob('*')]
+    all_paths.sort()
     all_latents = []
 
     print(all_paths)
@@ -107,7 +108,7 @@ def get_latents(opt, content_path=None, mode="train", output_dir=None):
     # Create mode-specific output directories
     if output_dir is None:
         output_dir = opt.latents_dir
-    base_save_path = os.path.join(output_dir, mode, extraction_path)
+    base_save_path = os.path.join(output_dir, extraction_path)
     os.makedirs(base_save_path, exist_ok=True)
 
     # Initialize model
