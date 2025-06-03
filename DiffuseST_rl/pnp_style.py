@@ -34,6 +34,9 @@ class PNP(nn.Module):
         self.device = config.device
         self.pipe = pipe
         self.pipe.scheduler.set_timesteps(config.ddim_steps, device=self.device)
+        self.unet = pipe.unet
+        self.unet.enable_gradient_checkpointing()
+        self.unet.to(self.device)
 
     def init_pnp(self, conv_injection_t, qk_injection_t):
         self.qk_injection_timesteps = self.pipe.scheduler.timesteps[:qk_injection_t] if qk_injection_t >= 0 else []
@@ -43,41 +46,53 @@ class PNP(nn.Module):
         return self.qk_injection_timesteps
     
 
-    def run_pnp(self, content_latents, style_latents, style_file, content_fn="content", style_fn="style"):
+    def run_pnp(self, content_latents, style_latents, style_file, video_num, content_fn="content", style_fn="style"):
+        torch.cuda.empty_cache()  # Clear cache before running
         
-        all_times = []
-        pnp_f_t = int(self.config.ddpm_steps * self.config.alpha)
-        pnp_attn_t = int(self.config.ddpm_steps * self.config.alpha)
-        content_step = self.init_pnp(conv_injection_t=pnp_f_t, qk_injection_t=pnp_attn_t)
-        cond_subject = ""
-        tgt_subject = ""
-        text_prompt_input = ""
-        cond_image = load_img1(self,style_file)
-        guidance_scale = 7.5
-        num_inference_steps = 50
-        negative_prompt = "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
-        
-        init_latents = content_latents[-1].unsqueeze(0).to(self.device)
+        with torch.cuda.amp.autocast():  # Enable automatic mixed precision
+            all_times = []
+            pnp_f_t = int(self.config.ddpm_steps * self.config.alpha)
+            pnp_attn_t = int(self.config.ddpm_steps * self.config.alpha)
+            content_step = self.init_pnp(conv_injection_t=pnp_f_t, qk_injection_t=pnp_attn_t)
+            cond_subject = ""
+            tgt_subject = ""
+            text_prompt_input = ""
+            cond_image = load_img1(self,style_file)
+            guidance_scale = 7.5
+            num_inference_steps = 50
+            negative_prompt = "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
+            
+            init_latents = content_latents[-1].unsqueeze(0).to(self.device, dtype=torch.float16)  # Use float16
 
-        output = self.pipe(
-            content_latents,
-            style_latents,
-            text_prompt_input,
-            cond_image,
-            cond_subject,
-            tgt_subject,
-            guidance_scale=guidance_scale,
-            num_inference_steps=num_inference_steps,
-            neg_prompt=negative_prompt,
-            latents=init_latents,
-            height=512,
-            width=512,
-            content_step=content_step,
-        ).images
+            output = self.pipe(
+                content_latents,
+                style_latents,
+                text_prompt_input,
+                cond_image,
+                cond_subject,
+                tgt_subject,
+                guidance_scale=guidance_scale,
+                num_inference_steps=num_inference_steps,
+                neg_prompt=negative_prompt,
+                latents=init_latents,
+                height=512,
+                width=512,
+                content_step=content_step,
+            ).images
 
-        output[0].save(f'{self.config.output_dir}/{os.path.basename(content_fn)}+{os.path.basename(style_fn)}.png')
-
-        return output
+            # Create full output path
+            output_dir = os.path.join(self.config.output_dir, str(video_num))
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Create filename
+            output_filename = f'{os.path.splitext(os.path.basename(content_fn))[0]}_{os.path.splitext(os.path.basename(style_fn))[0]}.png'
+            output_path = os.path.join(output_dir, output_filename)
+            
+            # Save the image
+            output[0].save(output_path)
+            
+            torch.cuda.empty_cache()  # Clear cache after running
+            return output
         
 
 def seed_everything(seed):
@@ -87,6 +102,13 @@ def seed_everything(seed):
     np.random.seed(seed)
     
 class BLIP(BlipDiffusionPipeline):    
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        kwargs["torch_dtype"] = torch.float16
+        kwargs["use_memory_efficient_attention"] = True
+        pipeline = super().from_pretrained(*args, **kwargs)
+        return pipeline
+
     @torch.no_grad()
     def __call__(
         self,
