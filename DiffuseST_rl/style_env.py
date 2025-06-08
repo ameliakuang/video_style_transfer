@@ -112,11 +112,6 @@ class StyleEnv:
         return content_loss, style_loss, temporal_loss, total_loss
 
     def step(self, delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame, video_num):
-        """
-        Apply delta_z to the content latents to obtain modified latents
-        Run PNP to obtain modified frame and original stylized frame
-        Compute reward as difference between loss of modified frame and loss of original stylized frame
-        """
         # Convert delta_z to float16 for consistency with PNP pipeline
         delta_z = delta_z.to(dtype=torch.float16)
         
@@ -140,7 +135,6 @@ class StyleEnv:
                                         content_fn=self.output_ori_fn,
                                         style_fn=self.style_file)[0]
 
-        # Ensure images are properly normalized PIL Images
         if isinstance(modified_stylized_frame, torch.Tensor):
             modified_stylized_frame = modified_stylized_frame.float().clamp(0, 1)
             modified_stylized_frame = transforms.ToPILImage()(modified_stylized_frame)
