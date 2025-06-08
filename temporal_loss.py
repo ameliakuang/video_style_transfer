@@ -29,9 +29,6 @@ def warp(x, flow, padding_mode='border'):
 
 
 class TemporalConsistencyLossRAFT(nn.Module):
-    """
-    Bidirectional temporal consistency loss using RAFT optical flow.
-    """
     def __init__(self,
                  small: bool = False,
                  loss_type: str = 'l1',
@@ -80,10 +77,6 @@ class TemporalConsistencyLossRAFT(nn.Module):
             return (a - b) ** 2
 
     def forward(self, F_t, F_tp1, S_t, S_tp1):
-        """
-        F_t, F_tp1: content frames in [0,1], shape B×3×H×W
-        S_t, S_tp1: stylized frames, shape B×3×H×W
-        """
         with torch.no_grad():
             flow_fwd = self._compute_flow(F_t, F_tp1)
             flow_bwd = self._compute_flow(F_tp1, F_t)
