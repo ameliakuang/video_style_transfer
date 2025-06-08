@@ -22,11 +22,6 @@ class StyleTransferEvaluator:
 
     def evaluate(self, content_paths_list, content_latents_list,
                 style_paths, all_style_latents, save_dir=None, prefix=""):
-        """
-        Evaluate the model on a dataset
-        Args:
-            prefix: String to prefix evaluation directories with (e.g. "train" or "test")
-        """
         eval_metrics = {
             'reward': [], 'content_loss': [],
             'style_loss': [], 'temporal_loss': [], 'total_loss': []
@@ -67,7 +62,6 @@ class StyleTransferEvaluator:
                       prev_modified_stylized_frame,
                       prev_ori_stylized_frame,
                       video_idx, save_dir=None, prefix=""):
-        """Single evaluation step"""
         style_env = StyleEnv(
             self.pnp, self.scheduler, self.device,
             content_latents, style_latents,

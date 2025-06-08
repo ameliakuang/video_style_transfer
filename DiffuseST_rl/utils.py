@@ -6,13 +6,11 @@ from datetime import datetime
 import torch
 
 def get_all_videos_from_folder(folder_path):
-    """Returns sorted list of subfolders containing video frames"""
     video_folders = [os.path.join(folder_path, d) for d in sorted(os.listdir(folder_path)) 
                     if os.path.isdir(os.path.join(folder_path, d))]
     return video_folders
 
 def load_all_videos_latents(video_folders, opt, mode="train"):
-    """Load latents and frame paths for all videos in a list of folders"""
     from extract_latents import get_latents
     
     all_video_paths = []
@@ -29,11 +27,8 @@ def load_all_videos_latents(video_folders, opt, mode="train"):
     return all_video_paths, all_video_latents, style_paths, style_latents
 
 def setup_experiment_folders(opt):
-    """Setup experiment folders and return paths"""
-    # Get video name from train_content_path
     video_name = os.path.basename(opt.train_content_path.rstrip('/'))
     
-    # Get current time
     now = datetime.now().strftime('%Y%m%d_%H%M%S')
     
     # Sanitize lr for folder name
@@ -64,10 +59,8 @@ def setup_experiment_folders(opt):
     }
 
 def plot_metrics(train_metrics, train_eval_metrics, test_eval_metrics, save_dir):
-    """Plot training and evaluation metrics"""
     plt.figure(figsize=(20, 15))
 
-    # Plot training metrics
     plt.subplot(3, 2, 1)
     plt.plot(train_metrics['epoch'], train_metrics['reward'], label='Training Reward')
     plt.xlabel('Epoch')
@@ -76,7 +69,6 @@ def plot_metrics(train_metrics, train_eval_metrics, test_eval_metrics, save_dir)
     plt.legend()
     plt.grid(True)
 
-    # Plot training vs evaluation rewards
     plt.subplot(3, 2, 2)
     plt.plot(train_metrics['epoch'], train_metrics['reward'], label='Training', color='blue')
     plt.plot(train_eval_metrics['epoch'], train_eval_metrics['reward'], label='Train Eval', color='green', marker='o')
@@ -87,7 +79,6 @@ def plot_metrics(train_metrics, train_eval_metrics, test_eval_metrics, save_dir)
     plt.legend()
     plt.grid(True)
 
-    # Plot evaluation metrics
     metric_names = ['content_loss', 'style_loss', 'temporal_loss', 'total_loss']
     for idx, metric in enumerate(metric_names):
         plt.subplot(3, 2, idx + 3)
@@ -104,8 +95,6 @@ def plot_metrics(train_metrics, train_eval_metrics, test_eval_metrics, save_dir)
     plt.close()
 
 def save_metrics(metrics_data, metrics_save_path):
-    """Save metrics in both JSON and NPZ formats"""
-    # Save as JSON
     metrics_json_path = os.path.join(metrics_save_path, 'all_metrics.json')
     with open(metrics_json_path, 'w') as f:
         json.dump(metrics_data, f, indent=4)

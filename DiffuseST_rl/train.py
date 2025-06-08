@@ -43,21 +43,17 @@ def parse_args():
     return parser.parse_args()
 
 def setup_models(opt, paths):
-    """Setup and return all required models"""
     # Setup BLIP diffusion pipeline
     model_key = "Salesforce/blipdiffusion"
     blip_diffusion_pipe = BLIP.from_pretrained(model_key, torch_dtype=torch.float16).to(opt.device)
     scheduler = PNDMScheduler.from_pretrained(model_key, subfolder="scheduler")
     scheduler.set_timesteps(opt.ddpm_steps)
     
-    # Setup PNP
     pnp = PNP(blip_diffusion_pipe, opt, paths)
     
-    # Setup policy network and optimizer
     policy = LatentPolicy().to(opt.device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=opt.lr)
     
-    # Setup loss functions
     temp_loss_fn = TemporalConsistencyLossRAFT(
         small=True,
         loss_type='l1',
@@ -67,7 +63,6 @@ def setup_models(opt, paths):
     )
     loss_fn_alex = LPIPS(net='alex')
     
-    # Setup VGG features
     feature_layers = [1, 6, 11, 20, 29]
     vgg = VGGFeatures(feature_layers)
     vgg.eval()
@@ -77,17 +72,13 @@ def setup_models(opt, paths):
     return pnp, scheduler, policy, optimizer, temp_loss_fn, loss_fn_alex, vgg
 
 def main():
-    # Parse arguments
     opt = parse_args()
     
-    # Setup experiment folders
     paths = setup_experiment_folders(opt)
     
-    # Get video folders
     train_video_folders = get_all_videos_from_folder(opt.train_content_path)
     test_video_folders = get_all_videos_from_folder(opt.test_content_path)
     
-    # Load latents
     train_content_paths_list, train_content_latents_list, style_paths, all_style_latents = load_all_videos_latents(
         train_video_folders, opt, mode="train"
     )
@@ -95,10 +86,8 @@ def main():
         test_video_folders, opt, mode="test"
     )
     
-    # Setup models
     pnp, scheduler, policy, optimizer, temp_loss_fn, loss_fn_alex, vgg = setup_models(opt, paths)
     
-    # Initialize trainer and evaluator
     trainer = StyleTransferTrainer(
         policy, optimizer, pnp, scheduler, opt.device,
         opt.content_weight, opt.style_weight, opt.temporal_weight,
@@ -111,7 +100,6 @@ def main():
         temp_loss_fn, loss_fn_alex, vgg
     )
     
-    # Initialize metrics
     train_metrics = {
         'epoch': [], 'reward': [], 'content_loss': [],
         'style_loss': [], 'temporal_loss': [], 'total_loss': [],
@@ -129,7 +117,6 @@ def main():
     best_reward = float('-inf')
     eval_interval = max(1, opt.num_epochs // 2)
     
-    # Training loop
     for epoch in range(opt.num_epochs):
         print(f"\nEpoch {epoch + 1}/{opt.num_epochs}")
         
@@ -192,7 +179,6 @@ def main():
                 is_best=False
             )
             
-            # Print evaluation results
             print("\nTraining Set Evaluation:")
             for k, v in train_eval.items():
                 print(f"{k}: {v:.4f}")
