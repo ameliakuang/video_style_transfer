@@ -46,7 +46,7 @@ class VGGFeatures(nn.Module):
 def gram_matrix(tensor):
     b, c, h, w = tensor.size()
     features = tensor.view(b, c, h * w)
-    G = torch.bmm(features, features.transpose(1, 2))  # Batch-wise matrix multiply
+    G = torch.bmm(features, features.transpose(1, 2)) 
     return G / (h * w)
 
 def normalize_batch(batch):
