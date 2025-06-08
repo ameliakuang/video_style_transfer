@@ -45,15 +45,6 @@ def compute_clip_similarities(frames):
     return sims
 
 def compute_style_similarities(frames, style_img):
-    """Compute CLIP similarity between each frame and a single style reference image.
-    
-    Args:
-        frames: numpy array of frames or list of frames
-        style_img: single PIL Image or numpy array of the style reference
-    
-    Returns:
-        list of similarity scores
-    """
     sims = []
     for frame in frames:
         sim = calculate_clip_score(frame, style_img)

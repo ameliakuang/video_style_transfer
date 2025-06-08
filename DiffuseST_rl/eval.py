@@ -7,7 +7,6 @@ import argparse
 from tqdm import tqdm
 
 def load_frames_from_directory(directory, subfolder_prefix=''):
-    """Load all frames from a directory in sorted order."""
     all_frames = []
     
     # Get all subfolders that start with the prefix
@@ -43,7 +42,6 @@ def load_frames_from_directory(directory, subfolder_prefix=''):
     return np.stack(all_frames)  # Return shape: [num_videos, num_frames, H, W, C]
 
 def evaluate_temporal_consistency(frames):
-    """Evaluate temporal consistency using CLIP similarities between consecutive frames."""
     # frames shape: [num_videos, num_frames, H, W, C]
     clip_similarities_per_video = []
     
@@ -58,7 +56,6 @@ def evaluate_temporal_consistency(frames):
     }
 
 def convert_frames_to_tensor(frames, target_size=(224, 224)):
-    """Convert list of PIL images to tensor format required by FVD calculation."""
     video_tensor = []
     for frame in frames:
         frame = frame.resize(target_size)
@@ -71,10 +68,10 @@ def main():
     parser = argparse.ArgumentParser(description='Evaluate stylized frames')
     parser.add_argument('--stylized_train_dir', type=str, default='./output/exp_20250603_032809_epochs10_lr0p0001_videotrain_5/train_eval', help='Directory containing stylized frames')
     parser.add_argument('--stylized_test_dir', type=str, default='./output/exp_20250603_032809_epochs10_lr0p0001_videotrain_5/test_eval', help='Directory containing stylized frames')
+    # parser.add_argument('--stylized_train_dir', type=str, default='./output_baseline/train', help='Directory containing stylized frames')
+    # parser.add_argument('--stylized_test_dir', type=str, default='./output_baseline/test', help='Directory containing stylized frames')
     parser.add_argument('--train_content_dir', type=str, default='../data2/train_5', help='Directory containing original content frames')
     parser.add_argument('--test_content_dir', type=str, default='../data2/test_2', help='Directory containing original content frames')
-    # parser.add_argument('--train_ori_stylized_dir', type=str, default='./', help='Directory containing original stylized frames (baseline)')
-    # parser.add_argument('--test_ori_stylized_dir', type=str, default='./', help='Directory containing original stylized frames (baseline)')
     parser.add_argument('--style_dir', type=str, default='./images/style', help='Directory containing style frames')
     parser.add_argument('--output_file', type=str, default='evaluation_results.txt', help='File to save evaluation results')
     
@@ -110,7 +107,6 @@ def main():
         print("3. Calculating frame-wise style preservation...")
         style_similarities = []
         
-        # Loop through each video
         for stylized_video in tqdm(stylized_frames, total=len(stylized_frames)):
             style_scores = []
             # Compare corresponding frames
@@ -126,8 +122,8 @@ def main():
         return results
     
     print("Loading frames...")
-    stylized_train_frames = load_frames_from_directory(args.stylized_train_dir, 'video_')
-    stylized_test_frames = load_frames_from_directory(args.stylized_test_dir, 'video_')
+    stylized_train_frames = load_frames_from_directory(args.stylized_train_dir, 'frames_')
+    stylized_test_frames = load_frames_from_directory(args.stylized_test_dir, 'frames_')
     train_content_frames = load_frames_from_directory(args.train_content_dir, 'frames_')
     test_content_frames = load_frames_from_directory(args.test_content_dir, 'frames_')
     style_frames = load_frames_from_directory(args.style_dir)
@@ -139,10 +135,9 @@ def main():
     print(f"Loaded {style_frames.shape[0]} x {style_frames.shape[1]} style frames")
     
     # Evaluate both sets
-    
-    test_results = evaluate_set(stylized_test_frames, test_content_frames, style_frames[0], "test")
     train_results = evaluate_set(stylized_train_frames, train_content_frames, style_frames[0], "training")
-    
+    test_results = evaluate_set(stylized_test_frames, test_content_frames, style_frames[0], "test")
+
     # Save results
     with open(args.output_file, 'w') as f:
         f.write("Evaluation Results\n")
