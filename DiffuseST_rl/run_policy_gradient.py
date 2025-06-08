@@ -88,10 +88,6 @@ def evaluate_policy(policy, content_latents, style_latents, content_file, style_
     # clip_score = calculate_clip_score(stylized_frame, reference_frame)
     # stylized_ori = Image.open(prev_modified_stylized_frame).convert("RGB")
     # clip_score_ori = calculate_clip_score(stylized_ori, reference_frame)
-    # fvd_score = calculate_fvd_score(stylized_frame)
-
-    is_score = 0
-    fvd_score = 0
     
     metrics = {
         'reward': reward,
@@ -99,8 +95,6 @@ def evaluate_policy(policy, content_latents, style_latents, content_file, style_
         'style_loss': style_loss,
         'temporal_loss': temporal_loss,
         'total_loss': loss_modified,
-        # 'is_score': is_score,
-        # 'fvd_score': fvd_score
     }
     
     return metrics, stylized_frame, ori_stylized_frame
@@ -404,7 +398,19 @@ def run_policy_gradients(train_content_paths_list, train_content_latents_list,
 
     # Plot metrics
     plot_metrics(train_metrics, train_eval_metrics, test_eval_metrics, metrics_save_path)
+
+    # Save all metrics data in JSON format
+    import json
+    metrics_data = {
+        'train_metrics': train_metrics,
+        'train_eval_metrics': train_eval_metrics,
+        'test_eval_metrics': test_eval_metrics
+    }
     
+    metrics_json_path = os.path.join(metrics_save_path, 'all_metrics.json')
+    with open(metrics_json_path, 'w') as f:
+        json.dump(metrics_data, f, indent=4)
+
     return policy
 
 if __name__ == "__main__":

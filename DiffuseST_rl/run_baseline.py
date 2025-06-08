@@ -88,19 +88,13 @@ def evaluate_policy(policy, content_latents, style_latents, content_file, style_
     # clip_score = calculate_clip_score(stylized_frame, reference_frame)
     # stylized_ori = Image.open(prev_modified_stylized_frame).convert("RGB")
     # clip_score_ori = calculate_clip_score(stylized_ori, reference_frame)
-    # fvd_score = calculate_fvd_score(stylized_frame)
 
-    is_score = 0
-    fvd_score = 0
-    
     metrics = {
         'reward': reward,
         'content_loss': content_loss,
         'style_loss': style_loss,
         'temporal_loss': temporal_loss,
-        'total_loss': loss_modified,
-        # 'is_score': is_score,
-        # 'fvd_score': fvd_score
+        'total_loss': loss_modified
     }
     
     return metrics, stylized_frame, ori_stylized_frame
@@ -196,7 +190,7 @@ def run_baseline(train_content_paths_list, train_content_latents_list,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--train_content_path', type=str, default='../data2/train_5')
+    parser.add_argument('--train_content_path', type=str, default='../data2/train_mini')
     parser.add_argument('--test_content_path', type=str, default='../data2/test_2')
     parser.add_argument('--style_path', type=str, default='images/style')
     parser.add_argument('--output_dir', type=str, default='output/')
