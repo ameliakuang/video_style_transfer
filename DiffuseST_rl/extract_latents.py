@@ -21,18 +21,6 @@ from pnp_style import PNP, BLIP
 
 
 def extract_latents_for_path(model, path, scheduler, opt, base_save_path, is_style=False):
-    """
-    Extract latents for a given path (either content or style)
-    Args:
-        model: Preprocess model
-        path: Path to process
-        scheduler: Scheduler to use
-        opt: Options
-        base_save_path: Base path to save latents
-        is_style: Whether processing style images (affects number of timesteps)
-    Returns:
-        tuple: (file_paths, latents)
-    """
     all_paths = [f for f in Path(path).glob('*')]
     all_paths.sort()
     all_latents = []

@@ -29,9 +29,7 @@ def warp(x, flow, padding_mode='border'):
 
 
 class TemporalConsistencyLossRAFT(nn.Module):
-    """
-    Bidirectional temporal consistency loss using RAFT optical flow.
-    """
+    #Bidirectional temporal consistency loss using RAFT optical flow.
     def __init__(self,
                  small: bool = False,
                  loss_type: str = 'l1',
@@ -62,8 +60,10 @@ class TemporalConsistencyLossRAFT(nn.Module):
     @torch.no_grad()
     def _compute_flow(self, im1, im2):
         B, C, H, W = im1.shape
-        assert H % 8 == 0 and H % 8 == 0, "Image size must be divisible by 8 for RAFT"
-        assert im1.shape == im2.shape, "Image batches shape should match"
+        # Image size must be divisible by 8 for RAFT
+        assert H % 8 == 0 and H % 8 == 0
+        # Image batches shape should match
+        assert im1.shape == im2.shape
 
         im1_p = self.preprocess(im1.clone()).to(self.device)
         im2_p = self.preprocess(im2.clone()).to(self.device)
@@ -80,10 +80,9 @@ class TemporalConsistencyLossRAFT(nn.Module):
             return (a - b) ** 2
 
     def forward(self, F_t, F_tp1, S_t, S_tp1):
-        """
-        F_t, F_tp1: content frames in [0,1], shape B×3×H×W
-        S_t, S_tp1: stylized frames, shape B×3×H×W
-        """
+        #F_t, F_tp1: content frames in [0,1], shape B×3×H×W
+        #S_t, S_tp1: stylized frames, shape B×3×H×W
+        
         with torch.no_grad():
             flow_fwd = self._compute_flow(F_t, F_tp1)
             flow_bwd = self._compute_flow(F_tp1, F_t)
