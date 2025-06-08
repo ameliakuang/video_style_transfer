@@ -32,12 +32,10 @@ from policy_network import LatentPolicy
 from style_env import StyleEnv
 
 def get_all_videos_from_folder(folder_path):
-    """Returns sorted list of subfolders containing video frames"""
     video_folders = [os.path.join(folder_path, d) for d in sorted(os.listdir(folder_path)) if os.path.isdir(os.path.join(folder_path, d))]
     return video_folders
 
 def load_all_videos_latents(video_folders, opt, mode="train"):
-    """Load latents and frame paths for all videos in a list of folders"""
     all_video_paths = []
     all_video_latents = []
     for vf in video_folders:
@@ -52,11 +50,6 @@ def load_all_videos_latents(video_folders, opt, mode="train"):
     return all_video_paths, all_video_latents, style_paths, style_latents
 
 def evaluate_policy(policy, content_latents, style_latents, content_file, style_file, prev_modified_stylized_frame, prev_ori_stylized_frame, pnp, scheduler, device, video_num, save_dir=None, temp_loss_fn=None, loss_fn_alex=None, vgg=None):
-    """
-    Evaluate the policy on a single content-style pair
-    Returns:
-        Dictionary containing all evaluation metrics
-    """
     style_env = StyleEnv(pnp, scheduler, device, content_latents, style_latents, 
                         content_file, style_file, content_latents, content_file,
                         content_weight=content_weight, temporal_weight=temporal_weight, style_weight=style_weight,
