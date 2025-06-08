@@ -23,7 +23,7 @@ def get_content_loss(ref_frame, target_frame):
     loss_fn_alex = lpips.LPIPS(net='alex') 
     # loss_fn_vgg = lpips.LPIPS(net='vgg')
     d = loss_fn_alex(ref_frame.unsqueeze(0), target_frame.unsqueeze(0))  
-    return d.item()  # Convert tensor to Python float
+    return d.item()  
 
 def get_video_content_loss(ref_frames, target_frames):
     loss = 0
