@@ -4,6 +4,7 @@ import numpy as np
 from tqdm import tqdm
 import os
 from datetime import datetime
+from style_env import StyleEnv  
 
 class StyleTransferTrainer:
     def __init__(self, policy, optimizer, pnp, scheduler, device, 
@@ -25,7 +26,6 @@ class StyleTransferTrainer:
 
     def train_epoch(self, train_content_paths_list, train_content_latents_list,
                    style_paths, all_style_latents, save_dir):
-        """Train for one epoch"""
         epoch_metrics = {
             'policy_loss': [], 'content_loss': [], 'style_loss': [],
             'temporal_loss': [], 'total_loss': [], 'reward': []
@@ -50,7 +50,6 @@ class StyleTransferTrainer:
                         epoch_ori_stylized_frames, i, j, save_dir
                     )
 
-                    # Update metrics
                     if metrics:
                         for key in epoch_metrics:
                             epoch_metrics[key].append(metrics[key])
@@ -62,9 +61,6 @@ class StyleTransferTrainer:
                     prev_content_latents, prev_content_file,
                     video_idx, epoch_modified_stylized_frames,
                     epoch_ori_stylized_frames, i, j, save_dir):
-        """Single training step"""
-        from style_env import StyleEnv
-
         style_env = StyleEnv(
             self.pnp, self.scheduler, self.device,
             curr_content_latents, style_latents,
@@ -92,7 +88,6 @@ class StyleTransferTrainer:
                 prev_modified_stylized_frame = epoch_modified_stylized_frames[-1]
                 prev_ori_stylized_frame = epoch_ori_stylized_frames[-1]
 
-            # Get reward and losses
             reward, content, style, temporal, loss_modified, content_ori, style_ori, temporal_ori, loss_ori, modified_stylized_frame, ori_stylized_frame = style_env.step(
                 delta_z, prev_modified_stylized_frame, prev_ori_stylized_frame, video_idx
             )
@@ -101,7 +96,6 @@ class StyleTransferTrainer:
             policy_loss = -log_prob[-1] * reward
             policy_loss = policy_loss / self.accumulation_steps
 
-        # Backward pass
         self.scaler.scale(policy_loss).backward()
 
         # Update if accumulation steps reached
@@ -132,7 +126,6 @@ class StyleTransferTrainer:
         return metrics
 
     def save_checkpoint(self, epoch, metrics, model_path, is_best=False):
-        """Save model checkpoint"""
         checkpoint = {
             'epoch': epoch + 1,
             'model_state_dict': self.policy.state_dict(),
