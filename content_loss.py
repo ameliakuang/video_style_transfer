@@ -7,7 +7,7 @@ import torchvision.transforms as transforms
 
 def load_frames_from_dir(frame_dir):
     transform = transforms.Compose([
-        transforms.Resize((256, 256)),  # Resize to a fixed size
+        transforms.Resize((256, 256)),
         transforms.ToTensor()
     ])
     frames = []
@@ -20,10 +20,9 @@ def load_frames_from_dir(frame_dir):
     return torch.stack(frames)
 
 def get_content_loss(ref_frame, target_frame):
-    loss_fn_alex = lpips.LPIPS(net='alex') # best forward scores
-    # loss_fn_vgg = lpips.LPIPS(net='vgg') # closer to "traditional" perceptual loss, when used for optimization
-
-    d = loss_fn_alex(ref_frame.unsqueeze(0), target_frame.unsqueeze(0))  # Add batch dimension
+    loss_fn_alex = lpips.LPIPS(net='alex') 
+    # loss_fn_vgg = lpips.LPIPS(net='vgg')
+    d = loss_fn_alex(ref_frame.unsqueeze(0), target_frame.unsqueeze(0))  
     return d.item()  # Convert tensor to Python float
 
 def get_video_content_loss(ref_frames, target_frames):
@@ -34,7 +33,7 @@ def get_video_content_loss(ref_frames, target_frames):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ref_frames", type=str, default="video/frames_1778068") # frames_853913, frames_855867
+    parser.add_argument("--ref_frames", type=str, default="video/frames_1778068")
     parser.add_argument("--target_frames", type=str, default="output/frames_1778068")
     args = parser.parse_args()
 
